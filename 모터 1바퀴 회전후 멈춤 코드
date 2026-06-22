@@ -1,0 +1,29 @@
+int enablePin = 12;
+int stepPin = 5;
+int dirPin = 4;
+
+void setup() {
+
+  pinMode(enablePin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+
+  digitalWrite(enablePin, LOW);
+  digitalWrite(dirPin, HIGH);
+
+  delay(1000);
+
+  for(int i = 0; i < 6400; i++) {
+
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(100);
+
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(100);
+  }
+
+  digitalWrite(enablePin, HIGH);
+}
+
+void loop() {
+}
