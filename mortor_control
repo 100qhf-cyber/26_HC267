@@ -1,42 +1,52 @@
-#include <AccelStepper.h>
+// DFROBOT V2 쉴드 오른쪽(M2/Y축) 모터 전용 핀
+int enablePin = 12; // 깨우기/재우기 핀
+int stepPin = 5;    // 박자(이동) 핀
+int dirPin = 4;     // 방향 핀
 
-// ⚠️ 중요: 현재 장착한 쉴드의 사양에 맞게 Step 핀과 Dir 핀 번호를 확인 후 수정해야 합니다.
-// (일반적인 CNC/스텝모터 쉴드는 X축 기준 2번, 5번 핀을 많이 사용합니다.)
-const int stepPin = 2; 
-const int dirPin = 5;  
-
-// 외부 드라이버 모드(인터페이스 타입 1)로 스텝모터 객체 선언
-AccelStepper myStepper(1, stepPin, dirPin);
+// 모터의 작동 상태를 기억하는 변수 (처음에는 안전을 위해 꺼둠)
+bool isRunning = false; 
 
 void setup() {
-  Serial.begin(9600);
-  
-  // 모터의 동작 성능 설정
-  myStepper.setMaxSpeed(1000);     // 초당 최대 스텝 수 (속도의 상한선)
-  myStepper.setAcceleration(300);  // 초당 속도 증가량 (가속도가 클수록 빠르게 최고 속도에 도달)
+  // 💡 컴퓨터와 아두이노의 통신 속도를 9600으로 맞추어 '채팅방'을 엽니다.
+  Serial.begin(9600); 
 
-  Serial.println("===== 스텝 모터 가속 테스트 시작 =====");
+  pinMode(enablePin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
   
-  // 최초 목표 위치 설정: 2000 스텝 위치로 이동 명령 (1.8도 모터 기준 10바퀴)
-  myStepper.moveTo(2000); 
+  digitalWrite(dirPin, HIGH);   // 방향 설정
+  digitalWrite(enablePin, HIGH); // 처음엔 힘을 풀고(Disable) 대기
+  
+  // 컴퓨터 화면에 안내 메시지 띄우기
+  Serial.println("===== PC 제어 시스템 준비 완료 =====");
+  Serial.println("숫자 '1'을 전송하면 작동을 시작합니다.");
+  Serial.println("숫자 '0'을 전송하면 즉시 정지합니다.");
 }
 
 void loop() {
-  // run() 함수는 loop 안에서 최대한 빠르게 반복 호출되어야 합니다.
-  // 이 함수가 실행되면서 내부적으로 현재 시간에 맞춰 속도를 계산하고 모터에 한 스텝씩 신호를 보냅니다.
-  myStepper.run();
-
-  // 설정한 목표 위치(distanceToGo가 0)에 도달했는지 확인
-  if (myStepper.distanceToGo() == 0) {
-    delay(1000); // 목표 위치 도달 후 1초간 정지 대기
+  // 1단계: 컴퓨터(노트북)로부터 날아온 메시지가 있는지 확인
+  if (Serial.available() > 0) {
+    char command = Serial.read(); // 날아온 글자 하나를 읽음
     
-    // 현재 위치가 2000이면 다시 0원으로, 0이면 다시 2000으로 목표를 전환하여 왕복 운동
-    if (myStepper.currentPosition() == 2000) {
-      Serial.println("반대 방향으로 가속 회전 시작 (목표: 0 스텝)");
-      myStepper.moveTo(0);
-    } else {
-      Serial.println("정방향으로 가속 회전 시작 (목표: 2000 스텝)");
-      myStepper.moveTo(2000);
+    // 명령어가 '1'일 때 -> 구동 시작
+    if (command == '1') {
+      isRunning = true;
+      digitalWrite(enablePin, LOW); // 드라이버 깨우기 (힘 주기)
+      Serial.println("명령 수신: ▶️ 모터 구동 시작!");
     }
+    // 명령어가 '0'일 때 -> 즉시 정지
+    else if (command == '0') {
+      isRunning = false;
+      digitalWrite(enablePin, HIGH); // 드라이버 재우기 (힘 풀기)
+      Serial.println("명령 수신: 🛑 긴급 정지 완료!");
+    }
+  }
+
+  // 2단계: isRunning이 true일 때만 계속 회전
+  if (isRunning == true) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(2000); 
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(2000); 
   }
 }
