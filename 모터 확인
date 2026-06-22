@@ -1,22 +1,22 @@
-// X축 모터 핀 설정 (일반적인 쉴드의 X축 기본 핀 번호입니다)
-int enablePin = 8; // 모터를 깨우는 핀
-int stepPin = 2;   // 박자(속도)를 주는 핀
-int dirPin = 5;    // 방향을 정하는 핀
+// DFROBOT V2 쉴드 오른쪽(M2/Y축) 모터 공식 핀 세팅
+int enablePin = 12; // M2 모터 깨우기
+int stepPin = 5;    // M2 모터 스텝(속도) 핀
+int dirPin = 4;     // M2 모터 방향 핀
 
 void setup() {
   pinMode(enablePin, OUTPUT);
   pinMode(stepPin, OUTPUT);
   pinMode(dirPin, OUTPUT);
 
-  // 모터 활성화 (LOW 신호를 주어야 모터가 움직일 준비를 합니다)
+  // 모터 활성화 (LOW 신호에서 모터가 꽉 잠기며 준비 완료)
   digitalWrite(enablePin, LOW); 
   
-  // 방향 설정
+  // 방향 설정 (HIGH 또는 LOW)
   digitalWrite(dirPin, HIGH); 
 }
 
 void loop() {
-  // 모터로 계속해서 스텝 신호를 보내어 회전시킵니다.
+  // 모터를 돌리는 박자 신호 전송
   digitalWrite(stepPin, HIGH);
   delayMicroseconds(2000); 
   
