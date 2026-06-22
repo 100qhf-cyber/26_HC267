@@ -29,3 +29,37 @@ void loop() {
   // 이 속도가 너무 빠르면 삐- 소리만 나고 안 돌 수 있습니다. 
   // 만약 안 돈다면 숫자 1000을 2000이나 3000으로 늘려보세요.
 }
+
+
+
+void setup() {
+  // 2번부터 13번까지 모든 디지털 핀을 강제로 제어합니다.
+  for (int i = 2; i <= 13; i++) {
+    pinMode(i, OUTPUT);
+    
+    // 일단 모든 핀에 LOW 신호를 보냅니다. 
+    // (어딘가에 숨어있을 Enable 핀을 무조건 LOW로 만들어서 드라이버를 강제로 깨웁니다)
+    digitalWrite(i, LOW); 
+  }
+  
+  // 방향을 제어할 만한 핀들(보통 5, 6, 7번)만 살짝 HIGH로 바꿔둡니다.
+  digitalWrite(5, HIGH);
+  digitalWrite(6, HIGH);
+  digitalWrite(7, HIGH);
+  
+  // ⚠️ 코드가 업로드되는 이 순간, 파워서플라이의 전류(A)가 0.5A 이상으로 
+  // 튀어 오르고 모터 축이 단단히 잠긴다면 범인을 잡은 것입니다!
+}
+
+void loop() {
+  // 스텝(속도) 핀으로 가장 많이 쓰이는 2, 3, 4번 핀에 동시에 박자를 줍니다.
+  digitalWrite(2, HIGH);
+  digitalWrite(3, HIGH);
+  digitalWrite(4, HIGH);
+  delayMicroseconds(2000); 
+  
+  digitalWrite(2, LOW);
+  digitalWrite(3, LOW);
+  digitalWrite(4, LOW);
+  delayMicroseconds(2000); 
+}
