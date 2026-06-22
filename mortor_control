@@ -1,52 +1,91 @@
-// DFROBOT V2 쉴드 오른쪽(M2/Y축) 모터 전용 핀
-int enablePin = 12; // 깨우기/재우기 핀
-int stepPin = 5;    // 박자(이동) 핀
-int dirPin = 4;     // 방향 핀
+// ===== 핀 번호 설정 =====
+int enablePin = 12;   // 모터 ON/OFF 제어 핀
+int stepPin = 5;      // 스텝 신호 출력 핀
+int dirPin = 4;       // 회전 방향 제어 핀
 
-// 모터의 작동 상태를 기억하는 변수 (처음에는 안전을 위해 꺼둠)
-bool isRunning = false; 
+// ===== 상태 변수 =====
+bool isRunning = false; // 현재 모터가 돌고 있는지 저장
+long stepCount = 0;     // 지금까지 이동한 총 스텝 수 저장
 
 void setup() {
-  // 💡 컴퓨터와 아두이노의 통신 속도를 9600으로 맞추어 '채팅방'을 엽니다.
-  Serial.begin(9600); 
 
+  // 컴퓨터와 아두이노 통신 시작
+  Serial.begin(9600);
+
+  // 핀을 출력 모드로 설정
   pinMode(enablePin, OUTPUT);
   pinMode(stepPin, OUTPUT);
   pinMode(dirPin, OUTPUT);
-  
-  digitalWrite(dirPin, HIGH);   // 방향 설정
-  digitalWrite(enablePin, HIGH); // 처음엔 힘을 풀고(Disable) 대기
-  
-  // 컴퓨터 화면에 안내 메시지 띄우기
-  Serial.println("===== PC 제어 시스템 준비 완료 =====");
-  Serial.println("숫자 '1'을 전송하면 작동을 시작합니다.");
-  Serial.println("숫자 '0'을 전송하면 즉시 정지합니다.");
+
+  // 처음에는 모터 정지 상태
+  // HIGH = Disable
+  // LOW  = Enable
+  digitalWrite(enablePin, HIGH);
+
+  // 방향 설정
+  // HIGH와 LOW를 바꾸면 반대 방향 회전
+  digitalWrite(dirPin, HIGH);
+
+  // 시리얼 모니터에 안내문 출력
+  Serial.println("1 = START");
+  Serial.println("0 = STOP");
 }
 
 void loop() {
-  // 1단계: 컴퓨터(노트북)로부터 날아온 메시지가 있는지 확인
-  if (Serial.available() > 0) {
-    char command = Serial.read(); // 날아온 글자 하나를 읽음
-    
-    // 명령어가 '1'일 때 -> 구동 시작
-    if (command == '1') {
+
+  // 컴퓨터로부터 데이터가 들어왔는지 확인
+  if (Serial.available()) {
+
+    // 입력된 문자 1개 읽기
+    char cmd = Serial.read();
+
+    // ===== START 명령 =====
+    if (cmd == '1') {
+
+      // 스텝 카운트 초기화
+      stepCount = 0;
+
+      // 회전 시작 플래그
       isRunning = true;
-      digitalWrite(enablePin, LOW); // 드라이버 깨우기 (힘 주기)
-      Serial.println("명령 수신: ▶️ 모터 구동 시작!");
+
+      // 드라이버 활성화
+      digitalWrite(enablePin, LOW);
+
+      Serial.println("START");
     }
-    // 명령어가 '0'일 때 -> 즉시 정지
-    else if (command == '0') {
+
+    // ===== STOP 명령 =====
+    if (cmd == '0') {
+
+      // 회전 정지
       isRunning = false;
-      digitalWrite(enablePin, HIGH); // 드라이버 재우기 (힘 풀기)
-      Serial.println("명령 수신: 🛑 긴급 정지 완료!");
+
+      // 드라이버 비활성화
+      digitalWrite(enablePin, HIGH);
+
+      // 현재까지 이동한 스텝 수 출력
+      Serial.print("STOP! 총 스텝 수 = ");
+      Serial.println(stepCount);
     }
   }
 
-  // 2단계: isRunning이 true일 때만 계속 회전
-  if (isRunning == true) {
+  // ===== 모터 회전 부분 =====
+  if (isRunning) {
+
+    // STEP HIGH
+    // 드라이버가 스텝 신호를 인식
     digitalWrite(stepPin, HIGH);
-    delayMicroseconds(2000); 
+
+    // 펄스 폭
+    delayMicroseconds(1200);
+
+    // STEP LOW
     digitalWrite(stepPin, LOW);
-    delayMicroseconds(2000); 
+
+    // 다음 스텝 전까지 대기
+    delayMicroseconds(1200);
+
+    // 스텝 수 1 증가
+    stepCount++;
   }
 }
