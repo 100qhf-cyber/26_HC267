@@ -1,0 +1,69 @@
+//y축//
+// ===== 핀 번호 설정 =====
+int enablePin = 12;   // 모터 ON/OFF 제어 핀
+int stepPin = 5;      // 스텝 신호 출력 핀
+int dirPin = 4;       // 회전 방향 제어 핀
+
+// ===== 상태 변수 =====
+bool isRunning = false;   // 현재 모터가 돌고 있는지
+bool isCW = true;         // true = 시계방향(+), false = 반시계방향(-)
+long position = 0;        // 현재 좌표 (시계: 증가, 반시계: 감소)
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(enablePin, OUTPUT);
+  pinMode(stepPin, OUTPUT);
+  pinMode(dirPin, OUTPUT);
+
+  digitalWrite(enablePin, HIGH);  // 처음엔 정지
+
+  Serial.println("1 = CW(시계, +)");
+  Serial.println("2 = CCW(반시계, -)");
+  Serial.println("0 = STOP");
+}
+
+void loop() {
+
+  if (Serial.available()) {
+    char cmd = Serial.read();
+
+    // ===== 시계방향 (+) =====
+    if (cmd == '1') {
+      isCW = true;
+      digitalWrite(dirPin, HIGH);   // 시계방향
+      isRunning = true;
+      digitalWrite(enablePin, LOW); // 드라이버 활성화
+      Serial.println("START CW (+)");
+    }
+
+    // ===== 반시계방향 (-) =====
+    if (cmd == '2') {
+      isCW = false;
+      digitalWrite(dirPin, LOW);    // 반시계방향
+      isRunning = true;
+      digitalWrite(enablePin, LOW);
+      Serial.println("START CCW (-)");
+    }
+
+    // ===== STOP =====
+    if (cmd == '0') {
+      isRunning = false;
+      digitalWrite(enablePin, HIGH);
+      Serial.print("STOP! 현재 좌표 = ");
+      Serial.println(position);
+    }
+  }
+
+  // ===== 모터 회전 =====
+  if (isRunning) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(1200);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(1200);
+
+    // 방향에 따라 좌표 증감
+    if (isCW) position++;
+    else      position--;
+  }
+}
