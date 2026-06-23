@@ -1,0 +1,93 @@
+// ===== X축 핀 =====
+const int X_EN = 8, X_STEP = 6, X_DIR = 7;
+// ===== Y축 핀 =====
+const int Y_EN = 12, Y_STEP = 5, Y_DIR = 4;
+
+// ===== 축 상태 구조체 =====
+struct Axis {
+  int enPin, stepPin, dirPin;
+  bool running;
+  bool cw;          // true=시계(+), false=반시계(-)
+  long pos;         // 좌표
+  unsigned long lastStep; // 마지막 스텝 시각(us)
+};
+
+Axis X = {X_EN, X_STEP, X_DIR, false, true, 0, 0};
+Axis Y = {Y_EN, Y_STEP, Y_DIR, false, true, 0, 0};
+
+const unsigned long STEP_INTERVAL = 1200; // us, 펄스 반주기
+
+void setup() {
+  Serial.begin(9600);
+
+  int pins[] = {X_EN, X_STEP, X_DIR, Y_EN, Y_STEP, Y_DIR};
+  for (int p : pins) pinMode(p, OUTPUT);
+
+  digitalWrite(X_EN, HIGH); // 정지
+  digitalWrite(Y_EN, HIGH);
+
+  Serial.println("=== 명령 ===");
+  Serial.println("x+ / x- : X축 시계/반시계");
+  Serial.println("y+ / y- : Y축 시계/반시계");
+  Serial.println("s : 정지 + 좌표");
+  Serial.println("p : 좌표 확인");
+}
+
+// 명령으로 축 시작
+void startAxis(Axis &a, bool cw) {
+  a.cw = cw;
+  digitalWrite(a.dirPin, cw ? HIGH : LOW); // 배선 반대면 교체
+  a.running = true;
+  digitalWrite(a.enPin, LOW);
+}
+
+void stopAll() {
+  X.running = false;
+  Y.running = false;
+  digitalWrite(X_EN, HIGH);
+  digitalWrite(Y_EN, HIGH);
+  printPos();
+}
+
+void printPos() {
+  Serial.print("좌표 = (");
+  Serial.print(X.pos);
+  Serial.print(", ");
+  Serial.print(Y.pos);
+  Serial.println(")");
+}
+
+// 논블로킹 스텝 (두 축 동시 회전 가능)
+void runAxis(Axis &a) {
+  if (!a.running) return;
+  unsigned long now = micros();
+  if (now - a.lastStep >= STEP_INTERVAL) {
+    // 펄스 토글 방식 대신 짧은 펄스 생성
+    digitalWrite(a.stepPin, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(a.stepPin, LOW);
+
+    a.pos += a.cw ? 1 : -1;
+    a.lastStep = now;
+  }
+}
+
+void loop() {
+  // ===== 명령 파싱 =====
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+
+    if (cmd == "x+") startAxis(X, true);
+    else if (cmd == "x-") startAxis(X, false);
+    else if (cmd == "y+") startAxis(Y, true);
+    else if (cmd == "y-") startAxis(Y, false);
+    else if (cmd == "s") stopAll();
+    else if (cmd == "p") printPos();
+  }
+
+  // ===== 두 축 동시 회전 =====
+  runAxis(X);
+  runAxis(Y);
+}
