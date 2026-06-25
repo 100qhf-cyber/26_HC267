@@ -1,0 +1,93 @@
+// ===== 1m x 1m 레일, 24구역 좌표 이동 =====
+// DFRobot Dual Bipolar Stepper Shield
+
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+// ===== 측정값 입력 (★ 실제 측정 후 수정) =====
+const long X_TOTAL_STEPS = 40000;  // X축 끝~끝 전체 스텝 (측정값 넣기)
+const long Y_TOTAL_STEPS = 40000;  // Y축 끝~끝 전체 스텝 (측정값 넣기)
+
+// ===== 그리드 설정 =====
+const int COLS = 6;   // 가로 칸 수 (X 방향)
+const int ROWS = 4;   // 세로 칸 수 (Y 방향)  → 6x4 = 24구역
+
+// 한 칸당 스텝 수 (자동 계산: 각 칸의 '중심'으로 이동하도록)
+const long X_STEP_PER_CELL = X_TOTAL_STEPS / COLS;
+const long Y_STEP_PER_CELL = Y_TOTAL_STEPS / ROWS;
+
+// 현재 위치 (스텝 단위)
+long curX = 0;
+long curY = 0;
+
+int stepDelay = 800;   // 속도(작을수록 빠름)
+
+void setup() {
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
+  digitalWrite(X_EN, LOW);   // 드라이버 활성화
+  digitalWrite(Y_EN, LOW);
+  Serial.begin(9600);
+  Serial.println("구역 번호(0~23) 입력 또는 'col row' 입력");
+  Serial.println("예: 0~23 단일 숫자 = 구역번호 / 두 숫자 = 열 행");
+}
+
+// 한 축을 목표 스텝까지 이동
+void moveAxis(int stepPin, int dirPin, long target, long &current) {
+  long diff = target - current;
+  if (diff == 0) return;
+  digitalWrite(dirPin, diff > 0 ? HIGH : LOW);
+  long steps = abs(diff);
+  for (long i = 0; i < steps; i++) {
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(stepDelay);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(stepDelay);
+  }
+  current = target;
+}
+
+// (열, 행) 구역의 중심으로 이동 — 수평 먼저, 수직 나중 (L자)
+void moveToCell(int col, int row) {
+  // 범위 체크
+  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
+    Serial.println("범위 벗어남! col:0~5, row:0~3");
+    return;
+  }
+  // 각 칸의 '중심' 좌표 계산 (칸 시작 + 칸의 절반)
+  long targetX = (long)(col * X_STEP_PER_CELL + X_STEP_PER_CELL / 2);
+  long targetY = (long)(row * Y_STEP_PER_CELL + Y_STEP_PER_CELL / 2);
+
+  moveAxis(X_STEP, X_DIR, targetX, curX);  // 수평 먼저
+  moveAxis(Y_STEP, Y_DIR, targetY, curY);  // 수직 나중
+
+  Serial.print("구역 ("); Serial.print(col); Serial.print(",");
+  Serial.print(row); Serial.print(") 이동 완료. ");
+  Serial.print("위치 X:"); Serial.print(curX);
+  Serial.print(" Y:"); Serial.println(curY);
+}
+
+void loop() {
+  if (Serial.available()) {
+    long a = Serial.parseInt();
+    delay(10);
+
+    if (Serial.available()) {
+      // 두 숫자 입력 = col row 직접 지정
+      long b = Serial.parseInt();
+      moveToCell((int)a, (int)b);
+    } else {
+      // 단일 숫자 = 구역번호(0~23) → col, row 변환
+      int idx = (int)a;
+      int col = idx % COLS;   // 가로 위치
+      int row = idx / COLS;   // 세로 위치
+      moveToCell(col, row);
+    }
+    // 입력 버퍼 비우기
+    while (Serial.available()) Serial.read();
+  }
+}
