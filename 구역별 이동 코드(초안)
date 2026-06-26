@@ -1,0 +1,201 @@
+// ===== 1m x 1m 레일 / 6x4 = 24 주차구역 제어 =====
+// DFRobot Dual Bipolar Stepper Shield
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+// ===== 레일 범위 (실측값) =====
+const long X_MAX = 31100;
+const long Y_MAX = 29240;
+
+// ===== 그리드 / 통로 설정 =====
+const int  COLS = 6;          // X 방향 칸 수
+const int  ROWS = 4;          // Y 방향 칸 수  → 24구역
+const long X_MARGIN = 2000;   // X 양 끝 통로 (★ 실측 후 조정)
+const long Y_MARGIN = 2000;   // Y 양 끝 통로
+
+const long X_CELL = (X_MAX - X_MARGIN * 2) / COLS;
+const long Y_CELL = (Y_MAX - Y_MARGIN * 2) / ROWS;
+
+// ===== 가감속 설정 =====
+const int  FAST_DELAY  = 350;   // 최고속(작을수록 빠름, us)
+const int  SLOW_DELAY  = 1000;  // 출발/도착 속도
+const long RAMP_STEPS  = 1500;  // 가속/감속 구간 길이(스텝)
+
+// ===== 상태 변수 =====
+long curX = 0, curY = 0;
+int  lastCol = -1, lastRow = -1;   // 마지막 도착 구역
+volatile bool stopFlag = false;
+
+// 구역 중심 좌표 계산
+long cellCenterX(int col) { return X_MARGIN + X_CELL * col + X_CELL / 2; }
+long cellCenterY(int row) { return Y_MARGIN + Y_CELL * row + Y_CELL / 2; }
+
+// 시리얼 명령 확인 (이동 중에도 호출)
+char pendingCmd = 0;
+void checkSerial() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == 'e' || c == 'E') { stopFlag = true; pendingCmd = 'e'; }
+    else if (c == 's' || c == 'S') { stopFlag = true; }
+    // 숫자/기타 명령은 loop에서 처리하므로 여기선 정지 키만
+    else if (c >= '0' && c <= '9') { /* loop에서 parseInt로 다시 읽음 */ }
+  }
+}
+
+// 사다리꼴 가감속으로 한 축 이동
+void moveAxis(int stepPin, int dirPin, long target, long &current) {
+  long diff = target - current;
+  if (diff == 0) return;
+  digitalWrite(dirPin, diff > 0 ? HIGH : LOW);
+  long steps = abs(diff);
+  long dir = (diff > 0) ? 1 : -1;
+
+  for (long i = 0; i < steps; i++) {
+    if (stopFlag) { return; }   // 비상정지 시 즉시 중단
+
+    // 사다리꼴 속도 프로파일
+    int d;
+    long remain = steps - i;
+    if (i < RAMP_STEPS && steps > RAMP_STEPS * 2) {
+      // 가속 구간
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
+    } else if (remain < RAMP_STEPS && steps > RAMP_STEPS * 2) {
+      // 감속 구간 (도착 직전 느리게)
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
+    } else if (steps <= RAMP_STEPS * 2) {
+      d = SLOW_DELAY;           // 짧은 이동은 그냥 저속
+    } else {
+      d = FAST_DELAY;           // 중간 최고속
+    }
+
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(d);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(d);
+    current += dir;
+
+    if ((i & 0x3F) == 0) checkSerial();  // 64스텝마다 정지키 확인
+  }
+}
+
+// 목표 좌표로 L자 이동 (갈 때 X→Y)
+bool moveTo(long tx, long ty) {
+  // 소프트 리밋 보호
+  if (tx < 0 || tx > X_MAX || ty < 0 || ty > Y_MAX) {
+    Serial.println(">> 범위 벗어남! 이동 취소");
+    return false;
+  }
+  moveAxis(X_STEP, X_DIR, tx, curX);
+  if (stopFlag) return false;
+  moveAxis(Y_STEP, Y_DIR, ty, curY);
+  return !stopFlag;
+}
+
+// 구역(col,row)으로 이동 — 현재 위치에서 바로
+void moveToCell(int col, int row) {
+  if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
+    Serial.println(">> 구역 범위 벗어남! col:0~5, row:0~3");
+    return;
+  }
+  long tx = cellCenterX(col);
+  long ty = cellCenterY(row);
+  if (moveTo(tx, ty)) {
+    lastCol = col; lastRow = row;
+    Serial.print(">> 구역 도착 ("); Serial.print(col);
+    Serial.print(","); Serial.print(row);
+    Serial.print(") 번호:"); Serial.print(row * COLS + col);
+    Serial.print(" / X:"); Serial.print(curX);
+    Serial.print(" Y:"); Serial.println(curY);
+  }
+}
+
+// (0,0) 복귀 — 올 때는 Y→X (역순)
+void goHome() {
+  Serial.println(">> 원점 복귀 시작");
+  stopFlag = false;
+  moveAxis(Y_STEP, Y_DIR, 0, curY);
+  if (stopFlag) return;
+  moveAxis(X_STEP, X_DIR, 0, curX);
+  if (!stopFlag) {
+    lastCol = -1; lastRow = -1;
+    Serial.println(">> 원점(0,0) 도착");
+  }
+}
+
+// 비상정지 + 자동 복귀
+void emergencyReturn() {
+  Serial.print(">> 비상정지! 현재 X:"); Serial.print(curX);
+  Serial.print(" Y:"); Serial.println(curY);
+  delay(300);                 // 관성 멈춤 대기
+  stopFlag = false;           // 복귀를 위해 플래그 해제
+  goHome();
+  Serial.println(">> 비상복귀 완료");
+}
+
+// 상태 조회
+void printStatus() {
+  Serial.println("===== 상태 =====");
+  Serial.print("현재 좌표  X:"); Serial.print(curX);
+  Serial.print(" Y:"); Serial.println(curY);
+  if (lastCol >= 0) {
+    Serial.print("현재 구역  ("); Serial.print(lastCol);
+    Serial.print(","); Serial.print(lastRow);
+    Serial.print(") 번호:"); Serial.println(lastRow * COLS + lastCol);
+  } else {
+    Serial.println("현재 구역  원점/구역밖");
+  }
+  Serial.print("동작 상태  "); Serial.println(stopFlag ? "정지" : "대기");
+  Serial.println("================");
+}
+
+void setup() {
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
+  digitalWrite(X_EN, LOW);   // 드라이버 활성화
+  digitalWrite(Y_EN, LOW);
+
+  Serial.begin(9600);
+  Serial.println("===== 24구역 레일 제어 =====");
+  Serial.println("[이동] 숫자 1개(0~23)=구역번호 / 숫자 2개=열 행");
+  Serial.println("[명령] h=원점복귀  e=비상정지+복귀  s=정지  t=상태조회");
+  Serial.println("구역에서 다른 구역 번호 입력 시 바로 이동");
+}
+
+void loop() {
+  if (!Serial.available()) return;
+
+  // 먼저 한 글자 엿보기 (명령 문자인지 숫자인지)
+  int peek = Serial.peek();
+
+  if (peek == 'h' || peek == 'H') {
+    Serial.read(); goHome();
+  } else if (peek == 'e' || peek == 'E') {
+    Serial.read(); emergencyReturn();
+  } else if (peek == 't' || peek == 'T') {
+    Serial.read(); printStatus();
+  } else if (peek == 's' || peek == 'S') {
+    Serial.read(); stopFlag = true; Serial.println(">> 정지");
+  } else if (peek == '-' || (peek >= '0' && peek <= '9')) {
+    stopFlag = false;
+    long a = Serial.parseInt();
+    delay(15);
+    if (Serial.available() && Serial.peek() != '\n' && Serial.peek() != '\r'
+        && (Serial.peek() == ' ' || (Serial.peek() >= '0' && Serial.peek() <= '9'))) {
+      long b = Serial.parseInt();      // 두 숫자 = 열 행
+      moveToCell((int)a, (int)b);
+    } else {
+      int idx = (int)a;                // 한 숫자 = 구역번호
+      moveToCell(idx % COLS, idx / COLS);
+    }
+  } else {
+    Serial.read();  // 알 수 없는 문자 버림
+  }
+
+  while (Serial.available() &&
+        (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' '))
+    Serial.read();  // 잔여 개행/공백 정리
+}
