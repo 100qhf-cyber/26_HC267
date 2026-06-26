@@ -1,4 +1,4 @@
-// ===== 1m x 1m 레일 / 6x4 = 24 주차구역 제어 =====
+// ===== 1m x 1m 레일 / 6x4 = 24 주차구역 제어 (통합본) =====
 // DFRobot Dual Bipolar Stepper Shield
 #define X_STEP 6
 #define X_DIR  7
@@ -22,31 +22,30 @@ const long Y_CELL = (Y_MAX - Y_MARGIN * 2) / ROWS;
 
 // ===== 가감속 설정 =====
 const int  FAST_DELAY  = 350;   // 최고속(작을수록 빠름, us)
-const int  SLOW_DELAY  = 1000;  // 출발/도착 속도
+const int  SLOW_DELAY  = 1000;  // 출발/도착/조그 속도
 const long RAMP_STEPS  = 1500;  // 가속/감속 구간 길이(스텝)
 
 // ===== 상태 변수 =====
 long curX = 0, curY = 0;
-int  lastCol = -1, lastRow = -1;   // 마지막 도착 구역
+int  lastCol = -1, lastRow = -1;
 volatile bool stopFlag = false;
+char pendingCmd = 0;
 
-// 구역 중심 좌표 계산
+// 구역 중심 좌표
 long cellCenterX(int col) { return X_MARGIN + X_CELL * col + X_CELL / 2; }
 long cellCenterY(int row) { return Y_MARGIN + Y_CELL * row + Y_CELL / 2; }
 
-// 시리얼 명령 확인 (이동 중에도 호출)
-char pendingCmd = 0;
+// 이동 중 정지키 확인 (s, e)
 void checkSerial() {
   while (Serial.available()) {
-    char c = Serial.read();
-    if (c == 'e' || c == 'E') { stopFlag = true; pendingCmd = 'e'; }
-    else if (c == 's' || c == 'S') { stopFlag = true; }
-    // 숫자/기타 명령은 loop에서 처리하므로 여기선 정지 키만
-    else if (c >= '0' && c <= '9') { /* loop에서 parseInt로 다시 읽음 */ }
+    char c = Serial.peek();
+    if (c == 'e' || c == 'E') { Serial.read(); stopFlag = true; pendingCmd = 'e'; }
+    else if (c == 's' || c == 'S') { Serial.read(); stopFlag = true; }
+    else break;   // 숫자 등은 loop에서 처리하도록 남겨둠
   }
 }
 
-// 사다리꼴 가감속으로 한 축 이동
+// 사다리꼴 가감속 이동 (구역 이동용)
 void moveAxis(int stepPin, int dirPin, long target, long &current) {
   long diff = target - current;
   if (diff == 0) return;
@@ -55,21 +54,18 @@ void moveAxis(int stepPin, int dirPin, long target, long &current) {
   long dir = (diff > 0) ? 1 : -1;
 
   for (long i = 0; i < steps; i++) {
-    if (stopFlag) { return; }   // 비상정지 시 즉시 중단
+    if (stopFlag) return;
 
-    // 사다리꼴 속도 프로파일
     int d;
     long remain = steps - i;
-    if (i < RAMP_STEPS && steps > RAMP_STEPS * 2) {
-      // 가속 구간
-      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
-    } else if (remain < RAMP_STEPS && steps > RAMP_STEPS * 2) {
-      // 감속 구간 (도착 직전 느리게)
-      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
-    } else if (steps <= RAMP_STEPS * 2) {
-      d = SLOW_DELAY;           // 짧은 이동은 그냥 저속
+    if (steps <= RAMP_STEPS * 2) {
+      d = SLOW_DELAY;                                   // 짧은 이동은 저속
+    } else if (i < RAMP_STEPS) {
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;       // 가속
+    } else if (remain < RAMP_STEPS) {
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;  // 감속
     } else {
-      d = FAST_DELAY;           // 중간 최고속
+      d = FAST_DELAY;                                   // 최고속
     }
 
     digitalWrite(stepPin, HIGH);
@@ -78,13 +74,12 @@ void moveAxis(int stepPin, int dirPin, long target, long &current) {
     delayMicroseconds(d);
     current += dir;
 
-    if ((i & 0x3F) == 0) checkSerial();  // 64스텝마다 정지키 확인
+    if ((i & 0x3F) == 0) checkSerial();
   }
 }
 
 // 목표 좌표로 L자 이동 (갈 때 X→Y)
 bool moveTo(long tx, long ty) {
-  // 소프트 리밋 보호
   if (tx < 0 || tx > X_MAX || ty < 0 || ty > Y_MAX) {
     Serial.println(">> 범위 벗어남! 이동 취소");
     return false;
@@ -101,9 +96,7 @@ void moveToCell(int col, int row) {
     Serial.println(">> 구역 범위 벗어남! col:0~5, row:0~3");
     return;
   }
-  long tx = cellCenterX(col);
-  long ty = cellCenterY(row);
-  if (moveTo(tx, ty)) {
+  if (moveTo(cellCenterX(col), cellCenterY(row))) {
     lastCol = col; lastRow = row;
     Serial.print(">> 구역 도착 ("); Serial.print(col);
     Serial.print(","); Serial.print(row);
@@ -130,8 +123,8 @@ void goHome() {
 void emergencyReturn() {
   Serial.print(">> 비상정지! 현재 X:"); Serial.print(curX);
   Serial.print(" Y:"); Serial.println(curY);
-  delay(300);                 // 관성 멈춤 대기
-  stopFlag = false;           // 복귀를 위해 플래그 해제
+  delay(300);
+  stopFlag = false;
   goHome();
   Serial.println(">> 비상복귀 완료");
 }
@@ -152,6 +145,84 @@ void printStatus() {
   Serial.println("================");
 }
 
+// ===== 수동 조그 모드 (비상 복구용) =====
+// 실제 이동한 스텝만큼만 위치 반영, 도중 's'로 정지 가능
+// 반환값: 실제로 이동한 스텝 수 (부호 포함)
+long jogAxis(int stepPin, int dirPin, long steps, bool positive) {
+  digitalWrite(dirPin, positive ? HIGH : LOW);
+  long moved = 0;
+  for (long i = 0; i < steps; i++) {
+    if (Serial.available()) {
+      char c = Serial.peek();
+      if (c == 's' || c == 'S') {
+        Serial.read();
+        Serial.println(">> 조그 정지");
+        break;
+      }
+    }
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(SLOW_DELAY);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(SLOW_DELAY);
+    moved++;
+  }
+  return positive ? moved : -moved;
+}
+
+void jogMode() {
+  Serial.println("===== 수동 조그 모드 =====");
+  Serial.println("x+ / x- : X축 이동   y+ / y- : Y축 이동");
+  Serial.println("기본 100스텝, 'x+500' 처럼 숫자 붙이면 그만큼 이동");
+  Serial.println("이동 중 s : 즉시 정지");
+  Serial.println("z : 현재 위치를 (0,0)으로 재설정   q : 조그모드 종료");
+
+  while (true) {
+    if (!Serial.available()) continue;
+
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.length() == 0) continue;
+
+    if (cmd == "q" || cmd == "Q") {
+      Serial.println(">> 조그모드 종료");
+      return;
+    }
+    else if (cmd == "z" || cmd == "Z") {
+      curX = 0; curY = 0;
+      lastCol = -1; lastRow = -1;
+      Serial.println(">> 현재 위치를 (0,0) 원점으로 재설정 완료!");
+    }
+    else if (cmd.startsWith("x") || cmd.startsWith("X") ||
+             cmd.startsWith("y") || cmd.startsWith("Y")) {
+      char axis = tolower(cmd.charAt(0));
+      char sign = cmd.charAt(1);
+      if (sign != '+' && sign != '-') {
+        Serial.println(">> 형식 오류 (x+ / x- / y+ / y-)");
+        continue;
+      }
+      bool pos = (sign == '+');
+      long n = 100;
+      if (cmd.length() > 2) {
+        long v = cmd.substring(2).toInt();
+        if (v > 0) n = v;
+      }
+      long moved;
+      if (axis == 'x') {
+        moved = jogAxis(X_STEP, X_DIR, n, pos);
+        curX += moved;          // 실제 이동분만 반영 (정지해도 정확)
+      } else {
+        moved = jogAxis(Y_STEP, Y_DIR, n, pos);
+        curY += moved;
+      }
+      Serial.print(">> 이동 후 X:"); Serial.print(curX);
+      Serial.print(" Y:"); Serial.println(curY);
+    }
+    else {
+      Serial.println(">> 알 수 없는 명령 (x+/x-/y+/y-/z/q)");
+    }
+  }
+}
+
 void setup() {
   pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
   pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
@@ -162,13 +233,13 @@ void setup() {
   Serial.println("===== 24구역 레일 제어 =====");
   Serial.println("[이동] 숫자 1개(0~23)=구역번호 / 숫자 2개=열 행");
   Serial.println("[명령] h=원점복귀  e=비상정지+복귀  s=정지  t=상태조회");
+  Serial.println("[비상] j=수동 조그모드(위치 꼬였을 때 복구)");
   Serial.println("구역에서 다른 구역 번호 입력 시 바로 이동");
 }
 
 void loop() {
   if (!Serial.available()) return;
 
-  // 먼저 한 글자 엿보기 (명령 문자인지 숫자인지)
   int peek = Serial.peek();
 
   if (peek == 'h' || peek == 'H') {
@@ -177,6 +248,8 @@ void loop() {
     Serial.read(); emergencyReturn();
   } else if (peek == 't' || peek == 'T') {
     Serial.read(); printStatus();
+  } else if (peek == 'j' || peek == 'J') {
+    Serial.read(); jogMode();
   } else if (peek == 's' || peek == 'S') {
     Serial.read(); stopFlag = true; Serial.println(">> 정지");
   } else if (peek == '-' || (peek >= '0' && peek <= '9')) {
@@ -185,17 +258,17 @@ void loop() {
     delay(15);
     if (Serial.available() && Serial.peek() != '\n' && Serial.peek() != '\r'
         && (Serial.peek() == ' ' || (Serial.peek() >= '0' && Serial.peek() <= '9'))) {
-      long b = Serial.parseInt();      // 두 숫자 = 열 행
+      long b = Serial.parseInt();
       moveToCell((int)a, (int)b);
     } else {
-      int idx = (int)a;                // 한 숫자 = 구역번호
+      int idx = (int)a;
       moveToCell(idx % COLS, idx / COLS);
     }
   } else {
-    Serial.read();  // 알 수 없는 문자 버림
+    Serial.read();
   }
 
   while (Serial.available() &&
         (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' '))
-    Serial.read();  // 잔여 개행/공백 정리
+    Serial.read();
 }
