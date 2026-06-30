@@ -1,0 +1,352 @@
+#include <avr/pgmspace.h>
+
+// ===== 24구역 주차 레일 제어 RAM 절약 버전 =====
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+const long X_MAX = 31100;
+const long Y_MAX = 29240;
+
+// 좌표 배열을 RAM이 아니라 플래시 메모리에 저장
+const long ZONE_X[24] PROGMEM = {
+   3929,  6609,  9291, 11968, 19140, 21821, 24502, 27178,
+   3929,  6609,  9291, 11968, 19140, 21821, 24502, 27178,
+   3929,  6609,  9291, 11968, 19140, 21821, 24502, 27178
+};
+
+const long ZONE_Y[24] PROGMEM = {
+  24204, 24204, 24204, 24204, 24204, 24204, 24204, 24204,
+  14620, 14620, 14620, 14620, 14620, 14620, 14620, 14620,
+   5036,  5036,  5036,  5036,  5036,  5036,  5036,  5036
+};
+
+const int  FAST_DELAY = 350;
+const int  SLOW_DELAY = 1000;
+const long RAMP_STEPS = 1500;
+
+long curX = 0, curY = 0;
+int lastZone = -1;
+volatile bool stopFlag = false;
+
+char input[16];
+
+long getZoneX(int idx) {
+  return pgm_read_dword(&ZONE_X[idx]);
+}
+
+long getZoneY(int idx) {
+  return pgm_read_dword(&ZONE_Y[idx]);
+}
+
+void printZoneName(int idx) {
+  char row = 'A' + idx / 8;
+  int col = idx % 8 + 1;
+  Serial.print(row);
+  Serial.print(col);
+}
+
+bool readCommand() {
+  static byte pos = 0;
+
+  while (Serial.available()) {
+    char c = Serial.read();
+
+    if (c == '\n' || c == '\r') {
+      if (pos == 0) continue;
+      input[pos] = '\0';
+      pos = 0;
+      return true;
+    }
+
+    if (pos < sizeof(input) - 1) {
+      input[pos++] = c;
+    }
+  }
+
+  return false;
+}
+
+int parseZone(char *s) {
+  while (*s == ' ') s++;
+
+  char row = toupper(s[0]);
+  if (row < 'A' || row > 'C') return -1;
+
+  int col = atoi(s + 1);
+  if (col < 1 || col > 8) return -1;
+
+  return (row - 'A') * 8 + (col - 1);
+}
+
+void checkSerial() {
+  while (Serial.available()) {
+    char c = Serial.peek();
+    if (c == 'e' || c == 'E' || c == 's' || c == 'S') {
+      Serial.read();
+      stopFlag = true;
+    } else break;
+  }
+}
+
+void moveAxis(int stepPin, int dirPin, long target, long &current) {
+  long diff = target - current;
+  if (diff == 0) return;
+
+  digitalWrite(dirPin, diff > 0 ? HIGH : LOW);
+
+  long steps = labs(diff);
+  long dir = diff > 0 ? 1 : -1;
+
+  for (long i = 0; i < steps; i++) {
+    if (stopFlag) return;
+
+    long remain = steps - i;
+    int d;
+
+    if (steps <= RAMP_STEPS * 2) {
+      d = SLOW_DELAY;
+    } else if (i < RAMP_STEPS) {
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
+    } else if (remain < RAMP_STEPS) {
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
+    } else {
+      d = FAST_DELAY;
+    }
+
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(d);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(d);
+
+    current += dir;
+
+    if ((i & 0x3F) == 0) checkSerial();
+  }
+}
+
+bool moveTo(long tx, long ty) {
+  if (tx < 0 || tx > X_MAX || ty < 0 || ty > Y_MAX) {
+    Serial.println(F(">> 범위 벗어남!"));
+    return false;
+  }
+
+  moveAxis(X_STEP, X_DIR, tx, curX);
+  if (stopFlag) return false;
+
+  moveAxis(Y_STEP, Y_DIR, ty, curY);
+  return !stopFlag;
+}
+
+void moveToZone(int idx) {
+  if (idx < 0 || idx >= 24) {
+    Serial.println(F(">> 오류: 0~23 또는 A1~C8"));
+    return;
+  }
+
+  long tx = getZoneX(idx);
+  long ty = getZoneY(idx);
+
+  Serial.print(F(">> "));
+  printZoneName(idx);
+  Serial.print(F(" 이동 X:"));
+  Serial.print(tx);
+  Serial.print(F(" Y:"));
+  Serial.println(ty);
+
+  stopFlag = false;
+
+  if (moveTo(tx, ty)) {
+    lastZone = idx;
+    Serial.print(F(">> 도착: "));
+    printZoneName(idx);
+    Serial.println();
+  }
+}
+
+void goHome() {
+  Serial.println(F(">> 원점 복귀 시작"));
+
+  stopFlag = false;
+
+  moveAxis(Y_STEP, Y_DIR, 0, curY);
+  if (stopFlag) return;
+
+  moveAxis(X_STEP, X_DIR, 0, curX);
+
+  if (!stopFlag) {
+    lastZone = -1;
+    Serial.println(F(">> 원점 도착"));
+  }
+}
+
+void emergencyReturn() {
+  Serial.print(F(">> 비상정지 X:"));
+  Serial.print(curX);
+  Serial.print(F(" Y:"));
+  Serial.println(curY);
+
+  delay(300);
+  stopFlag = false;
+  goHome();
+
+  Serial.println(F(">> 비상복귀 완료"));
+}
+
+void printStatus() {
+  Serial.println(F("===== 상태 ====="));
+  Serial.print(F("X:"));
+  Serial.print(curX);
+  Serial.print(F(" Y:"));
+  Serial.println(curY);
+
+  if (lastZone >= 0) {
+    Serial.print(F("구역: "));
+    printZoneName(lastZone);
+    Serial.print(F(" 번호:"));
+    Serial.println(lastZone);
+  } else {
+    Serial.println(F("구역: 원점/밖"));
+  }
+
+  Serial.print(F("상태: "));
+  Serial.println(stopFlag ? F("정지") : F("대기"));
+}
+
+void printZones() {
+  Serial.println(F("===== 구역 목록 ====="));
+
+  for (int i = 0; i < 24; i++) {
+    Serial.print(i);
+    Serial.print(F(") "));
+    printZoneName(i);
+    Serial.print(F(" X:"));
+    Serial.print(getZoneX(i));
+    Serial.print(F(" Y:"));
+    Serial.println(getZoneY(i));
+  }
+}
+
+long jogAxis(int stepPin, int dirPin, long steps, bool positive) {
+  digitalWrite(dirPin, positive ? HIGH : LOW);
+
+  long moved = 0;
+
+  for (long i = 0; i < steps; i++) {
+    if (Serial.available() && (Serial.peek() == 's' || Serial.peek() == 'S')) {
+      Serial.read();
+      Serial.println(F(">> 조그 정지"));
+      break;
+    }
+
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(SLOW_DELAY);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(SLOW_DELAY);
+
+    moved++;
+  }
+
+  return positive ? moved : -moved;
+}
+
+void jogMode() {
+  Serial.println(F("===== 조그 모드 ====="));
+  Serial.println(F("x+ / x- / y+ / y- / z / q"));
+
+  while (true) {
+    if (!readCommand()) continue;
+
+    char axis = tolower(input[0]);
+    char sign = input[1];
+
+    if (axis == 'q') {
+      Serial.println(F(">> 조그 종료"));
+      return;
+    }
+
+    if (axis == 'z') {
+      curX = 0;
+      curY = 0;
+      lastZone = -1;
+      Serial.println(F(">> 현재 위치 원점 설정"));
+      continue;
+    }
+
+    if ((axis == 'x' || axis == 'y') && (sign == '+' || sign == '-')) {
+      bool pos = sign == '+';
+      long n = atoi(input + 2);
+      if (n <= 0) n = 100;
+
+      long moved;
+
+      if (axis == 'x') {
+        moved = jogAxis(X_STEP, X_DIR, n, pos);
+        curX += moved;
+      } else {
+        moved = jogAxis(Y_STEP, Y_DIR, n, pos);
+        curY += moved;
+      }
+
+      Serial.print(F(">> X:"));
+      Serial.print(curX);
+      Serial.print(F(" Y:"));
+      Serial.println(curY);
+    } else {
+      Serial.println(F(">> 형식 오류"));
+    }
+  }
+}
+
+void setup() {
+  pinMode(X_STEP, OUTPUT);
+  pinMode(X_DIR, OUTPUT);
+  pinMode(X_EN, OUTPUT);
+
+  pinMode(Y_STEP, OUTPUT);
+  pinMode(Y_DIR, OUTPUT);
+  pinMode(Y_EN, OUTPUT);
+
+  digitalWrite(X_EN, LOW);
+  digitalWrite(Y_EN, LOW);
+
+  Serial.begin(9600);
+
+  Serial.println(F("===== 24구역 레일 제어 ====="));
+  Serial.println(F("입력: A1~C8 또는 0~23"));
+  Serial.println(F("h 원점 / e 비상 / s 정지 / t 상태 / l 목록 / j 조그"));
+}
+
+void loop() {
+  if (!readCommand()) return;
+
+  char first = toupper(input[0]);
+
+  if (first == 'H') {
+    goHome();
+  } else if (first == 'E') {
+    emergencyReturn();
+  } else if (first == 'T') {
+    printStatus();
+  } else if (first == 'J') {
+    jogMode();
+  } else if (first == 'L') {
+    printZones();
+  } else if (first == 'S') {
+    stopFlag = true;
+    Serial.println(F(">> 정지"));
+  } else if (first == 'A' || first == 'B' || first == 'C') {
+    int idx = parseZone(input);
+    if (idx < 0) Serial.println(F(">> 오류: A1~C8 입력"));
+    else moveToZone(idx);
+  } else if (first >= '0' && first <= '9') {
+    int idx = atoi(input);
+    if (idx < 0 || idx >= 24) Serial.println(F(">> 오류: 0~23 입력"));
+    else moveToZone(idx);
+  } else {
+    Serial.println(F(">> 알 수 없는 명령"));
+  }
+}
