@@ -19,4 +19,13 @@ async function refresh() {
     tbody.appendChild(row);
   }
 
-  for
+  for (const btn of tbody.querySelectorAll(".delete-btn")) {
+    btn.addEventListener("click", async () => {
+      await fetch(`/api/vehicles/${btn.dataset.id}`, { method: "DELETE" });
+      refresh();
+    });
+  }
+}
+
+refresh();
+setInterval(refresh, 10000);
