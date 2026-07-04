@@ -1,0 +1,29 @@
+① GitHub에서 코드 받기
+
+1. https://github.com/yywoo1234-bit/asdadas 접속
+2. 브랜치를 claude/kiosk-vehicle-data-input-gd9376으로 전환
+3. 초록색 "Code" 버튼 → "Download ZIP"
+4. 원하는 위치(바탕화면 등)에 압축 풀기
+5. 안쪽으로 계속 들어가서 app.py가 실제로 보이는 kiosk 폴더 찾기
+
+② 처음 한 번만 하는 설정
+
+1. kiosk 폴더 안에서 주소창 클릭 → cmd 입력 → 엔터 (터미널 열림)
+2. 아래 명령어를 한 줄씩 입력 + 엔터
+python -m venv venv
+venv\Scripts\activate
+pip install flask
+
+③ 실행할 때마다 (매번)
+
+1. kiosk 폴더에서 터미널 열기 (② 의 1번과 동일)
+2. 아래 입력:
+venv\Scripts\activate
+python app.py
+3. "Running on http://127.0.0.1:5000" 문구 뜨면 성공
+4. 브라우저에서 http://localhost:5000 접속 (키오스크 입력 화면)
+5. http://localhost:5000/status 접속하면 입력된 데이터 확인 가능
+
+④ 끄고 싶을 때
+
+1. 터미널 창에서 Ctrl + C 누르기 (또는 창 그냥 닫기)
