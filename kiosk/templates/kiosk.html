@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>충전 요청 정보 입력</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="kiosk">
+    <h1>전기차 충전 요청</h1>
+    <p class="subtitle">아래 정보를 입력하고 충전을 신청하세요</p>
+
+    <form id="vehicle-form" class="card">
+      <label>
+        주차 구역 번호
+        <input type="text" name="parking_spot" placeholder="예: A-3" required autocomplete="off">
+      </label>
+
+      <label>
+        차량 번호판
+        <input type="text" name="license_plate" placeholder="예: 12가 3456" required autocomplete="off">
+      </label>
+
+      <label>
+        차종 <span class="optional">(선택)</span>
+        <input type="text" name="vehicle_model" placeholder="예: 아이오닉 5" autocomplete="off">
+      </label>
+
+      <label>
+        배터리 잔량
+        <div class="slider-row">
+          <input type="range" name="battery_level" min="0" max="100" value="50" id="battery-slider">
+          <output id="battery-output" for="battery-slider">50%</output>
+        </div>
+      </label>
+
+      <label>
+        예상 출차 시간
+        <input type="time" name="expected_departure_time" required>
+      </label>
+
+      <button type="submit" class="submit-btn">충전 신청하기</button>
+      <p id="form-error" class="error" hidden></p>
+    </form>
+  </main>
+
+  <div id="confirm-overlay" class="overlay" hidden>
+    <div class="overlay-card">
+      <h2>등록이 완료되었습니다</h2>
+      <p>잠시 후 초기 화면으로 돌아갑니다</p>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='kiosk.js') }}"></script>
+</body>
+</html>

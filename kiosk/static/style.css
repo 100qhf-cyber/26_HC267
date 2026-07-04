@@ -1,0 +1,172 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  background: #0f172a;
+  color: #f1f5f9;
+  min-height: 100vh;
+}
+
+.kiosk {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+}
+
+h1 {
+  font-size: 2.4rem;
+  margin: 0 0 4px;
+  text-align: center;
+}
+
+.subtitle {
+  color: #94a3b8;
+  margin: 0 0 24px;
+  text-align: center;
+}
+
+.card {
+  background: #1e293b;
+  border-radius: 24px;
+  padding: 32px;
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 1.1rem;
+}
+
+.optional {
+  color: #64748b;
+  font-size: 0.85rem;
+  font-weight: normal;
+}
+
+input[type="text"],
+input[type="time"] {
+  font-size: 1.3rem;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 2px solid #334155;
+  background: #0f172a;
+  color: #f1f5f9;
+}
+
+input[type="text"]:focus,
+input[type="time"]:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+input[type="range"] {
+  flex: 1;
+  height: 40px;
+  accent-color: #38bdf8;
+}
+
+#battery-output {
+  min-width: 60px;
+  font-size: 1.3rem;
+  font-weight: 600;
+  text-align: right;
+}
+
+.submit-btn {
+  margin-top: 8px;
+  padding: 20px;
+  font-size: 1.4rem;
+  font-weight: 700;
+  border: none;
+  border-radius: 16px;
+  background: #38bdf8;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.submit-btn:active {
+  background: #0ea5e9;
+}
+
+.error {
+  color: #f87171;
+  font-size: 1rem;
+  text-align: center;
+  margin: 0;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay-card {
+  background: #1e293b;
+  border-radius: 24px;
+  padding: 48px 64px;
+  text-align: center;
+}
+
+.overlay-card h2 {
+  font-size: 2rem;
+  margin: 0 0 12px;
+  color: #4ade80;
+}
+
+.status-page {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 24px;
+}
+
+th, td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #334155;
+}
+
+th {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+button.delete-btn {
+  background: transparent;
+  border: 1px solid #f87171;
+  color: #f87171;
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
