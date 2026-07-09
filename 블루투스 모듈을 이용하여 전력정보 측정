@@ -1,25 +1,17 @@
 #include <Wire.h>
 #include <Adafruit_INA219.h>
-#include <SoftwareSerial.h>
 
 Adafruit_INA219 ina219;
 
-// Nano D2 = HC-06 TXD
-// Nano D3 = HC-06 RXD
-SoftwareSerial BTSerial(2, 3);
-
 void setup() {
-  Serial.begin(9600);
-  BTSerial.begin(9600);
+  Serial.begin(9600);  // D0/D1 + USB 시리얼 둘 다 사용
 
   if (!ina219.begin()) {
     Serial.println("INA219 연결 실패");
-    BTSerial.println("INA219 연결 실패");
     while (1);
   }
 
   Serial.println("INA219 측정 시작");
-  BTSerial.println("INA219 측정 시작");
 }
 
 void loop() {
@@ -30,24 +22,6 @@ void loop() {
 
   float loadVoltage_V = busVoltage_V + (shuntVoltage_mV / 1000.0);
 
-  // 컴퓨터에서 보기 좋은 형태로 HC-06에 전송
-  BTSerial.println("===== 무선충전 전력 정보 =====");
-
-  BTSerial.print("전압: ");
-  BTSerial.print(loadVoltage_V, 3);
-  BTSerial.println(" V");
-
-  BTSerial.print("전류: ");
-  BTSerial.print(current_mA, 2);
-  BTSerial.println(" mA");
-
-  BTSerial.print("전력: ");
-  BTSerial.print(power_mW, 2);
-  BTSerial.println(" mW");
-
-  BTSerial.println();
-
-  // 수신부 Nano를 USB로 직접 꽂았을 때 확인용
   Serial.println("===== 무선충전 전력 정보 =====");
 
   Serial.print("전압: ");
