@@ -1,0 +1,39 @@
+#include <SoftwareSerial.h>
+
+// RX: D2, TX: D3
+SoftwareSerial btSerial(2, 3);
+
+// 시간 체크용 변수
+unsigned long previousMillis = 0;
+const long interval = 1000; // 1초 간격
+
+void setup() {
+  Serial.begin(9600);
+  btSerial.begin(9600);
+  
+  Serial.println("=== 자동 전력 측정 시스템 시작 ===");
+  Serial.println("1초마다 자동으로 데이터를 요청합니다.");
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // 1. 1초마다 자동으로 'M' 명령 전송
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis; // 시간 갱신
+
+    btSerial.print("M");
+    // 디버깅용 메시지 (너무 자주 뜨면 아래 줄을 지우셔도 됩니다)
+    Serial.println("[SYSTEM] 측정 명령(M) 전송...");
+  }
+
+  // 2. 수신부에서 넘어온 데이터 감지 및 출력
+  if (btSerial.available()) {
+    String powerData = btSerial.readStringUntil('\n');
+    
+    if (powerData.length() > 0) {
+      Serial.print("[DATA] 수신: ");
+      Serial.println(powerData);
+    }
+  }
+}
