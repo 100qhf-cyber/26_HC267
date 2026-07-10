@@ -1,0 +1,109 @@
+#include <Wire.h>
+
+#include <Adafruit_INA219.h>
+
+
+
+Adafruit_INA219 ina219;
+
+bool measuring = true;   // 측정 상태 (기본값: 처음엔 켜짐)
+
+
+
+// delay(50) 대신 1초(1000ms) 간격을 제어하기 위한 타이머 변수
+
+unsigned long previousMillis = 0;
+
+const long interval = 50;  // 50ms (1초에 20번 측정) 
+
+
+
+void setup() {
+
+  // HC-06이 D0, D1에 있으므로 기본 Serial을 사용합니다.
+
+  Serial.begin(9600); 
+
+
+
+  if (!ina219.begin()) {
+
+    Serial.println("INA219 연결 실패");
+
+    while (1);
+
+  }
+
+  ina219.setCalibration_16V_400mA();  // 5V 저전류용
+
+
+
+  Serial.println("측정 시작 (s: 종료, r: 재시작)");
+
+}
+
+
+
+void loop() {
+
+  // 노트북 블루투스로부터 들어오는 명령어 확인
+
+  if (Serial.available()) {
+
+    char cmd = Serial.read();
+
+    if (cmd == 's' || cmd == 'S') {
+
+      measuring = false;
+
+      Serial.println(">> 측정 종료");
+
+    } else if (cmd == 'r' || cmd == 'R') {
+
+      measuring = true;
+
+      Serial.println(">> 측정 재시작");
+
+    }
+
+  }
+
+
+
+  // 측정 상태(measuring)가 true일 때만 실행
+
+  if (measuring) {
+
+    unsigned long currentMillis = millis(); // 아두이노 내부 시계 확인
+
+    
+
+    // 마지막으로 측정한 시간으로부터 1초(1000ms)가 지났을 때만 측정 수행
+
+    if (currentMillis - previousMillis >= interval) {
+
+      previousMillis = currentMillis; // 측정 시간 업데이트
+
+
+
+      float busV    = ina219.getBusVoltage_V();
+
+      float current = ina219.getCurrent_mA();
+
+      float power   = ina219.getPower_mW();
+
+
+
+      // 기존의 깔끔한 출력 포맷 유지
+
+      Serial.print("Voltage_V:"); Serial.print(busV , 1); Serial.print("\t");
+
+      Serial.print("Current_mA:"); Serial.print(current, 1);       Serial.print("\t");
+
+      Serial.print("Power_mW:");   Serial.println(power, 1);
+
+    }
+
+  }
+
+}
