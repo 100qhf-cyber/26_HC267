@@ -1,0 +1,44 @@
+#include <Wire.h>
+#include <Adafruit_INA219.h>
+
+Adafruit_INA219 ina219;
+bool measuring = true;   // 측정 상태
+
+void setup() {
+  Serial.begin(9600);
+
+  if (!ina219.begin()) {
+    Serial.println("INA219 연결 실패");
+    while (1);
+  }
+  ina219.setCalibration_16V_400mA();  // 5V 저전류용
+
+  Serial.println("측정 시작 (s: 종료, r: 재시작)");
+}
+
+void loop() {
+  // 시리얼 명령 확인
+  if (Serial.available()) {
+    char cmd = Serial.read();
+    if (cmd == 's' || cmd == 'S') {
+      measuring = false;
+      Serial.println(">> 측정 종료");
+    } else if (cmd == 'r' || cmd == 'R') {
+      measuring = true;
+      Serial.println(">> 측정 재시작");
+    }
+  }
+
+  // 측정 중일 때만 출력
+  if (measuring) {
+    float busV    = ina219.getBusVoltage_V();
+    float current = ina219.getCurrent_mA();
+    float power   = ina219.getPower_mW();
+
+    Serial.print("Voltage_mV:"); Serial.print(busV * 1000.0, 0); Serial.print("\t");
+    Serial.print("Current_mA:"); Serial.print(current, 1);        Serial.print("\t");
+    Serial.print("Power_mW:");   Serial.println(power, 1);
+  }
+
+  delay(50);
+}
