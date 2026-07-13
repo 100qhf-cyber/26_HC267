@@ -1,0 +1,91 @@
+// ===== XY 레일 이동 + 스위치 누르면 무조건 정지 =====
+// DFRobot Dual Bipolar Stepper Shield
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+#define X_LIMIT 9
+#define Y_LIMIT 10
+
+#define STEP_DELAY 800   // 속도 (us, 클수록 느림)
+
+long curX = 0, curY = 0;
+
+// steps만큼 이동 (양수/음수). 이동 중 해당 축 스위치 눌리면 즉시 정지
+void moveAxis(int stepPin, int dirPin, int limitPin, long steps) {
+  bool positive = (steps >= 0);
+  long n = abs(steps);
+  digitalWrite(dirPin, positive ? HIGH : LOW);
+
+  for (long i = 0; i < n; i++) {
+    // 방향 상관없이 스위치 감시
+    if (digitalRead(limitPin) == LOW) {
+      delayMicroseconds(200);
+      if (digitalRead(limitPin) == LOW) {   // 2회 연속 LOW = 진짜 눌림
+        Serial.println(">> 스위치 감지! 정지");
+        return;
+      }
+    }
+
+    digitalWrite(stepPin, HIGH);
+    delayMicroseconds(STEP_DELAY);
+    digitalWrite(stepPin, LOW);
+    delayMicroseconds(STEP_DELAY);
+
+    // 위치는 실제 움직인 만큼만 갱신
+    if (stepPin == X_STEP) curX += positive ? 1 : -1;
+    else                   curY += positive ? 1 : -1;
+  }
+}
+
+void setup() {
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
+  digitalWrite(X_EN, LOW);   // 모터가 안 돌면 HIGH로 바꿔서 테스트
+  digitalWrite(Y_EN, LOW);
+
+  pinMode(X_LIMIT, INPUT_PULLUP);
+  pinMode(Y_LIMIT, INPUT_PULLUP);
+
+  Serial.begin(9600);
+  Serial.println("===== XY 레일 테스트 =====");
+  Serial.println("x500 / x-500 : X축 이동   y500 / y-500 : Y축 이동");
+  Serial.println("t : 스위치 상태 확인");
+  Serial.println("이동 중 스위치가 눌리면 그 자리에서 정지");
+}
+
+void loop() {
+  if (!Serial.available()) return;
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  if (cmd.length() == 0) return;
+
+  if (cmd == "t" || cmd == "T") {
+    Serial.print(">> X스위치: ");
+    Serial.print(digitalRead(X_LIMIT) == LOW ? "눌림" : "해제");
+    Serial.print(" / Y스위치: ");
+    Serial.println(digitalRead(Y_LIMIT) == LOW ? "눌림" : "해제");
+    return;
+  }
+  else if (cmd.charAt(0) == 'x' || cmd.charAt(0) == 'X') {
+    long n = cmd.substring(1).toInt();
+    if (n == 0) { Serial.println(">> 형식: x500 / x-500"); return; }
+    moveAxis(X_STEP, X_DIR, X_LIMIT, n);
+  }
+  else if (cmd.charAt(0) == 'y' || cmd.charAt(0) == 'Y') {
+    long n = cmd.substring(1).toInt();
+    if (n == 0) { Serial.println(">> 형식: y500 / y-500"); return; }
+    moveAxis(Y_STEP, Y_DIR, Y_LIMIT, n);
+  }
+  else {
+    Serial.println(">> 명령: x500 / y-500 / t");
+    return;
+  }
+
+  Serial.print(">> 현재 위치 X:"); Serial.print(curX);
+  Serial.print(" Y:"); Serial.println(curY);
+}
