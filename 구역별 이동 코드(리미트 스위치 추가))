@@ -1,4 +1,4 @@
-// ===== 1m x 1m 레일 / 6x4 = 24 주차구역 제어 (통합본) =====
+// ===== 1m x 1m 레일 / 6x4 = 24 주차구역 제어 (리미트 스위치 통합) =====
 // DFRobot Dual Bipolar Stepper Shield
 #define X_STEP 6
 #define X_DIR  7
@@ -7,23 +7,27 @@
 #define Y_DIR  4
 #define Y_EN   12
 
+// ===== 리미트 스위치 =====
+#define X_LIMIT 10   // X축 리미트 (INPUT_PULLUP, 눌리면 LOW)
+#define Y_LIMIT 9    // Y축 리미트
+
 // ===== 레일 범위 (실측값) =====
 const long X_MAX = 31100;
 const long Y_MAX = 29240;
 
 // ===== 그리드 / 통로 설정 =====
-const int  COLS = 6;          // X 방향 칸 수
-const int  ROWS = 4;          // Y 방향 칸 수  → 24구역
-const long X_MARGIN = 2000;   // X 양 끝 통로 (★ 실측 후 조정)
-const long Y_MARGIN = 2000;   // Y 양 끝 통로
+const int  COLS = 6;
+const int  ROWS = 4;
+const long X_MARGIN = 2000;
+const long Y_MARGIN = 2000;
 
 const long X_CELL = (X_MAX - X_MARGIN * 2) / COLS;
 const long Y_CELL = (Y_MAX - Y_MARGIN * 2) / ROWS;
 
 // ===== 가감속 설정 =====
-const int  FAST_DELAY  = 350;   // 최고속(작을수록 빠름, us)
-const int  SLOW_DELAY  = 1000;  // 출발/도착/조그 속도
-const long RAMP_STEPS  = 1500;  // 가속/감속 구간 길이(스텝)
+const int  FAST_DELAY  = 350;
+const int  SLOW_DELAY  = 1000;
+const long RAMP_STEPS  = 1500;
 
 // ===== 상태 변수 =====
 long curX = 0, curY = 0;
@@ -31,41 +35,52 @@ int  lastCol = -1, lastRow = -1;
 volatile bool stopFlag = false;
 char pendingCmd = 0;
 
-// 구역 중심 좌표
+// 리미트 스위치 눌림 확인
+bool limitPressed(int pin) { return digitalRead(pin) == LOW; }
+
 long cellCenterX(int col) { return X_MARGIN + X_CELL * col + X_CELL / 2; }
 long cellCenterY(int row) { return Y_MARGIN + Y_CELL * row + Y_CELL / 2; }
 
-// 이동 중 정지키 확인 (s, e)
 void checkSerial() {
   while (Serial.available()) {
     char c = Serial.peek();
     if (c == 'e' || c == 'E') { Serial.read(); stopFlag = true; pendingCmd = 'e'; }
     else if (c == 's' || c == 'S') { Serial.read(); stopFlag = true; }
-    else break;   // 숫자 등은 loop에서 처리하도록 남겨둠
+    else break;
   }
 }
 
-// 사다리꼴 가감속 이동 (구역 이동용)
-void moveAxis(int stepPin, int dirPin, long target, long &current) {
+// 사다리꼴 가감속 이동 (리미트 스위치 감지 포함)
+void moveAxis(int stepPin, int dirPin, int limitPin, long target, long &current) {
   long diff = target - current;
   if (diff == 0) return;
   digitalWrite(dirPin, diff > 0 ? HIGH : LOW);
   long steps = abs(diff);
   long dir = (diff > 0) ? 1 : -1;
+  bool movingNeg = (dir < 0);   // 원점 방향 이동 여부
 
   for (long i = 0; i < steps; i++) {
     if (stopFlag) return;
 
+    // ★ 리미트 스위치 감지 (원점 방향 이동 중일 때만)
+    if (movingNeg && limitPressed(limitPin)) {
+      current = 0;
+      Serial.print(">> 리미트 감지! ");
+      Serial.print(limitPin == X_LIMIT ? "X" : "Y");
+      Serial.println("축 위치를 0으로 설정 후 정지");
+      return;
+    }
+
     int d;
     long remain = steps - i;
     if (steps <= RAMP_STEPS * 2) {
-      d = SLOW_DELAY;                                   // 짧은 이동은 저속
+      d = SLOW_DELAY;
     } else if (i < RAMP_STEPS) {
-      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;       // 가속
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
     } else if (remain < RAMP_STEPS) {
-      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;  // 감속
+      d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
     } else {
-      d = FAST_DELAY;                                   // 최고속
+      d = FAST_DELAY;
     }
 
     digitalWrite(stepPin, HIGH);
@@ -78,19 +93,17 @@ void moveAxis(int stepPin, int dirPin, long target, long &current) {
   }
 }
 
-// 목표 좌표로 L자 이동 (갈 때 X→Y)
 bool moveTo(long tx, long ty) {
   if (tx < 0 || tx > X_MAX || ty < 0 || ty > Y_MAX) {
     Serial.println(">> 범위 벗어남! 이동 취소");
     return false;
   }
-  moveAxis(X_STEP, X_DIR, tx, curX);
+  moveAxis(X_STEP, X_DIR, X_LIMIT, tx, curX);
   if (stopFlag) return false;
-  moveAxis(Y_STEP, Y_DIR, ty, curY);
+  moveAxis(Y_STEP, Y_DIR, Y_LIMIT, ty, curY);
   return !stopFlag;
 }
 
-// 구역(col,row)으로 이동 — 현재 위치에서 바로
 void moveToCell(int col, int row) {
   if (col < 0 || col >= COLS || row < 0 || row >= ROWS) {
     Serial.println(">> 구역 범위 벗어남! col:0~5, row:0~3");
@@ -106,20 +119,18 @@ void moveToCell(int col, int row) {
   }
 }
 
-// (0,0) 복귀 — 올 때는 Y→X (역순)
 void goHome() {
   Serial.println(">> 원점 복귀 시작");
   stopFlag = false;
-  moveAxis(Y_STEP, Y_DIR, 0, curY);
+  moveAxis(Y_STEP, Y_DIR, Y_LIMIT, 0, curY);
   if (stopFlag) return;
-  moveAxis(X_STEP, X_DIR, 0, curX);
+  moveAxis(X_STEP, X_DIR, X_LIMIT, 0, curX);
   if (!stopFlag) {
     lastCol = -1; lastRow = -1;
     Serial.println(">> 원점(0,0) 도착");
   }
 }
 
-// 비상정지 + 자동 복귀
 void emergencyReturn() {
   Serial.print(">> 비상정지! 현재 X:"); Serial.print(curX);
   Serial.print(" Y:"); Serial.println(curY);
@@ -129,7 +140,6 @@ void emergencyReturn() {
   Serial.println(">> 비상복귀 완료");
 }
 
-// 상태 조회
 void printStatus() {
   Serial.println("===== 상태 =====");
   Serial.print("현재 좌표  X:"); Serial.print(curX);
@@ -141,16 +151,19 @@ void printStatus() {
   } else {
     Serial.println("현재 구역  원점/구역밖");
   }
+  Serial.print("리미트     X:"); Serial.print(limitPressed(X_LIMIT) ? "눌림" : "정상");
+  Serial.print(" / Y:"); Serial.println(limitPressed(Y_LIMIT) ? "눌림" : "정상");
   Serial.print("동작 상태  "); Serial.println(stopFlag ? "정지" : "대기");
   Serial.println("================");
 }
 
-// ===== 수동 조그 모드 (비상 복구용) =====
-// 실제 이동한 스텝만큼만 위치 반영, 도중 's'로 정지 가능
-// 반환값: 실제로 이동한 스텝 수 (부호 포함)
-long jogAxis(int stepPin, int dirPin, long steps, bool positive) {
+// ===== 수동 조그 (리미트 스위치 감지 포함) =====
+// 리미트 눌리면 정지 + 해당 축 0으로 설정
+void jogAxis(int stepPin, int dirPin, int limitPin, long steps, bool positive, long &current) {
   digitalWrite(dirPin, positive ? HIGH : LOW);
   long moved = 0;
+  bool limitHit = false;
+
   for (long i = 0; i < steps; i++) {
     if (Serial.available()) {
       char c = Serial.peek();
@@ -160,13 +173,28 @@ long jogAxis(int stepPin, int dirPin, long steps, bool positive) {
         break;
       }
     }
+
+    // ★ 리미트 감지 (음의 방향으로 이동 중일 때만)
+    if (!positive && limitPressed(limitPin)) {
+      Serial.print(">> 리미트 감지! ");
+      Serial.print(limitPin == X_LIMIT ? "X" : "Y");
+      Serial.println("축을 0으로 설정 후 정지");
+      limitHit = true;
+      break;
+    }
+
     digitalWrite(stepPin, HIGH);
     delayMicroseconds(SLOW_DELAY);
     digitalWrite(stepPin, LOW);
     delayMicroseconds(SLOW_DELAY);
     moved++;
   }
-  return positive ? moved : -moved;
+
+  if (limitHit) {
+    current = 0;
+  } else {
+    current += positive ? moved : -moved;
+  }
 }
 
 void jogMode() {
@@ -174,6 +202,7 @@ void jogMode() {
   Serial.println("x+ / x- : X축 이동   y+ / y- : Y축 이동");
   Serial.println("기본 100스텝, 'x+500' 처럼 숫자 붙이면 그만큼 이동");
   Serial.println("이동 중 s : 즉시 정지");
+  Serial.println("이동 중 리미트 감지 시 자동 정지 + 해당 축 0으로 설정");
   Serial.println("z : 현재 위치를 (0,0)으로 재설정   q : 조그모드 종료");
 
   while (true) {
@@ -206,13 +235,10 @@ void jogMode() {
         long v = cmd.substring(2).toInt();
         if (v > 0) n = v;
       }
-      long moved;
       if (axis == 'x') {
-        moved = jogAxis(X_STEP, X_DIR, n, pos);
-        curX += moved;          // 실제 이동분만 반영 (정지해도 정확)
+        jogAxis(X_STEP, X_DIR, X_LIMIT, n, pos, curX);
       } else {
-        moved = jogAxis(Y_STEP, Y_DIR, n, pos);
-        curY += moved;
+        jogAxis(Y_STEP, Y_DIR, Y_LIMIT, n, pos, curY);
       }
       Serial.print(">> 이동 후 X:"); Serial.print(curX);
       Serial.print(" Y:"); Serial.println(curY);
@@ -226,7 +252,9 @@ void jogMode() {
 void setup() {
   pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
   pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
-  digitalWrite(X_EN, LOW);   // 드라이버 활성화
+  pinMode(X_LIMIT, INPUT_PULLUP);   // ★ 리미트 스위치
+  pinMode(Y_LIMIT, INPUT_PULLUP);
+  digitalWrite(X_EN, LOW);
   digitalWrite(Y_EN, LOW);
 
   Serial.begin(9600);
@@ -234,7 +262,7 @@ void setup() {
   Serial.println("[이동] 숫자 1개(0~23)=구역번호 / 숫자 2개=열 행");
   Serial.println("[명령] h=원점복귀  e=비상정지+복귀  s=정지  t=상태조회");
   Serial.println("[비상] j=수동 조그모드(위치 꼬였을 때 복구)");
-  Serial.println("구역에서 다른 구역 번호 입력 시 바로 이동");
+  Serial.println("[리미트] X:D10 / Y:D9, 원점 방향 이동 중 감지 시 자동 정지+0설정");
 }
 
 void loop() {
