@@ -1,0 +1,217 @@
+// XY 캘리브레이션 - 축 선택 + 방향 자동보정 + 3사이클 왕복
+
+struct Axis {
+  int stepPin, dirPin, minSw, maxSw;
+  bool dirMinus, dirPlus;
+  const char* label;
+};
+
+// ---- 프로토타입 ----
+void checkStop();
+void waitForStart();
+char selectFirstAxis();
+long calibrateAxis(Axis &ax);
+void stepOnce(int stepPin);
+
+// ---- 모터 핀 ----
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+// ---- 리미트 스위치 ----
+#define X_MIN_SW 9
+#define X_MAX_SW 11
+#define Y_MIN_SW 10
+#define Y_MAX_SW 3
+
+const unsigned int STEP_HALF_US = 500;
+const int RUNS = 3;
+const int BACKOFF_STEPS = 200;   // 스위치 이탈 후 여유 스텝
+
+Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
+Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
+
+long xMax[RUNS], yMax[RUNS];
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
+  pinMode(X_MIN_SW, INPUT_PULLUP);
+  pinMode(X_MAX_SW, INPUT_PULLUP);
+  pinMode(Y_MIN_SW, INPUT_PULLUP);
+  pinMode(Y_MAX_SW, INPUT_PULLUP);
+
+  digitalWrite(X_EN, HIGH);
+  digitalWrite(Y_EN, HIGH);
+
+  Serial.println(F("=== XY 캘리브레이션 준비 ==="));
+  Serial.println(F("먼저 측정할 축 선택: 'x' 또는 'y' + Enter"));
+  char first = selectFirstAxis();
+  Serial.print(F("  -> 시작 축: ")); Serial.println(first);
+
+  Serial.println(F("\n시작: 'm' + Enter    비상정지: 's' + Enter"));
+  waitForStart();
+
+  digitalWrite(X_EN, LOW);
+  digitalWrite(Y_EN, LOW);
+  Serial.println(F("\n>> 시작 <<"));
+  delay(500);
+
+  Axis *firstAx  = (first == 'X') ? &xAxis : &yAxis;
+  Axis *secondAx = (first == 'X') ? &yAxis : &xAxis;
+  long *firstArr  = (first == 'X') ? xMax : yMax;
+  long *secondArr = (first == 'X') ? yMax : xMax;
+
+  for (int run = 0; run < RUNS; run++) {
+    Serial.print(F("\n========== 사이클 ")); Serial.print(run + 1);
+    Serial.println(F(" =========="));
+
+    Serial.print(F("[")); Serial.print(firstAx->label); Serial.println(F("축 왕복]"));
+    firstArr[run] = calibrateAxis(*firstAx);
+
+    Serial.print(F("[")); Serial.print(secondAx->label); Serial.println(F("축 왕복]"));
+    secondArr[run] = calibrateAxis(*secondAx);
+
+    Serial.print(F("\n>>> 사이클 ")); Serial.print(run + 1); Serial.println(F(" 결과 <<<"));
+    Serial.print(F("   X : ")); Serial.print(xMax[run]);
+    Serial.print(F(" steps  (")); Serial.print(xMax[run] / 40.0); Serial.println(F(" mm)"));
+    Serial.print(F("   Y : ")); Serial.print(yMax[run]);
+    Serial.print(F(" steps  (")); Serial.print(yMax[run] / 40.0); Serial.println(F(" mm)"));
+    delay(1000);
+  }
+
+  long xSum = 0, ySum = 0;
+  for (int i = 0; i < RUNS; i++) { xSum += xMax[i]; ySum += yMax[i]; }
+  long xAvg = xSum / RUNS;
+  long yAvg = ySum / RUNS;
+
+  Serial.println(F("\n========== 최종 결과 =========="));
+  for (int i = 0; i < RUNS; i++) {
+    Serial.print(F("  사이클 ")); Serial.print(i + 1);
+    Serial.print(F("  X=")); Serial.print(xMax[i]);
+    Serial.print(F("  Y=")); Serial.println(yMax[i]);
+  }
+  Serial.print(F("  X 평균: ")); Serial.print(xAvg);
+  Serial.print(F(" steps  (")); Serial.print(xAvg / 40.0); Serial.println(F(" mm)"));
+  Serial.print(F("  Y 평균: ")); Serial.print(yAvg);
+  Serial.print(F(" steps  (")); Serial.print(yAvg / 40.0); Serial.println(F(" mm)"));
+
+  digitalWrite(X_EN, HIGH);
+  digitalWrite(Y_EN, HIGH);
+}
+
+void loop() {}
+
+// ---- 스텝 펄스 1회 ----
+void stepOnce(int stepPin) {
+  digitalWrite(stepPin, HIGH);
+  delayMicroseconds(STEP_HALF_US);
+  digitalWrite(stepPin, LOW);
+  delayMicroseconds(STEP_HALF_US);
+}
+
+// ---- 시작 축 선택 ----
+char selectFirstAxis() {
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == 'x' || c == 'X') return 'X';
+      if (c == 'y' || c == 'Y') return 'Y';
+    }
+    delay(10);
+  }
+}
+
+// ---- 'm' 대기 ----
+void waitForStart() {
+  while (true) {
+    if (Serial.available()) {
+      char c = Serial.read();
+      if (c == 'm' || c == 'M') return;
+    }
+    delay(10);
+  }
+}
+
+// ---- 's' 비상정지 ----
+void checkStop() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == 's' || c == 'S') {
+      Serial.println(F("\n!! 비상정지 !!"));
+      digitalWrite(X_EN, HIGH);
+      digitalWrite(Y_EN, HIGH);
+      while (true) { delay(1000); }
+    }
+  }
+}
+
+long calibrateAxis(Axis &ax) {
+  // (1) 원점(-) 이동
+  Serial.print(F("  ")); Serial.print(ax.label); Serial.println(F(" (-) 원점 이동..."));
+  digitalWrite(ax.dirPin, ax.dirMinus);
+  delayMicroseconds(10);
+
+  while (digitalRead(ax.minSw) != LOW) {
+    checkStop();
+    if (digitalRead(ax.maxSw) == LOW) {
+      Serial.print(F("    !! ")); Serial.print(ax.label);
+      Serial.println(F("축 반대편 감지 - 방향 자동 반전"));
+      bool tmp = ax.dirMinus; ax.dirMinus = ax.dirPlus; ax.dirPlus = tmp;
+      digitalWrite(ax.dirPin, ax.dirMinus);
+      delayMicroseconds(10);
+      while (digitalRead(ax.maxSw) == LOW) {
+        checkStop();
+        stepOnce(ax.stepPin);
+      }
+      for (int i = 0; i < BACKOFF_STEPS; i++) {
+        checkStop();
+        stepOnce(ax.stepPin);
+      }
+      continue;
+    }
+    stepOnce(ax.stepPin);
+  }
+  Serial.println(F("    원점 도달"));
+  delay(300);
+
+  // (2) 끝(+) 이동, 카운트
+  Serial.print(F("  ")); Serial.print(ax.label); Serial.println(F(" (+) 끝점 이동..."));
+  digitalWrite(ax.dirPin, ax.dirPlus);
+  delayMicroseconds(10);
+
+  while (digitalRead(ax.minSw) == LOW) {
+    checkStop();
+    stepOnce(ax.stepPin);
+  }
+
+  long steps = 0;
+  while (digitalRead(ax.maxSw) != LOW) {
+    checkStop();
+    stepOnce(ax.stepPin);
+    steps++;
+  }
+  Serial.println(F("    끝점 도달"));
+  delay(200);
+
+  // ★ 다음 사이클을 위해 MAX 스위치에서 이탈 (스위치 위에서 사이클 종료 방지)
+  digitalWrite(ax.dirPin, ax.dirMinus);
+  delayMicroseconds(10);
+  for (int i = 0; i < BACKOFF_STEPS; i++) {
+    checkStop();
+    stepOnce(ax.stepPin);
+  }
+  delay(300);
+  return steps;
+}
+
+
+
+# x축 길이 86 / 77(x축의 중앙값 이동)
+
+# y축 길이 89 / 78(y축의 중앙값)
