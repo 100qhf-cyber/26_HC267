@@ -1,42 +1,124 @@
 #include <Wire.h>
 #include <Adafruit_INA219.h>
+#include <SoftwareSerial.h>
 
 Adafruit_INA219 ina219;
 
+// HC-06 연결
+// HC-06 TXD → Nano D2
+// HC-06 RXD ← Nano D3
+SoftwareSerial BT(2, 3);
+
+bool measurementEnabled = false;
+
+unsigned long previousMillis = 0;
+const unsigned long measurementInterval = 1000;
+
 void setup() {
-  Serial.begin(9600);  // D0/D1 + USB 시리얼 둘 다 사용
+  Serial.begin(9600);
+  BT.begin(9600);
 
   if (!ina219.begin()) {
     Serial.println("INA219 연결 실패");
+    BT.println("INA219 연결 실패");
+
     while (1);
   }
 
-  Serial.println("INA219 측정 시작");
+  Serial.println("INA219 연결 성공");
+  Serial.println("m: 측정 시작 / s: 측정 중지");
+
+  BT.println("INA219 연결 성공");
+  BT.println("m: 측정 시작 / s: 측정 중지");
 }
 
 void loop() {
-  float shuntVoltage_mV = ina219.getShuntVoltage_mV();
-  float busVoltage_V = ina219.getBusVoltage_V();
+  // USB 시리얼 모니터 명령 확인
+  if (Serial.available() > 0) {
+    char command = Serial.read();
+    processCommand(command);
+  }
+
+  // HC-06 블루투스 COM8 명령 확인
+  if (BT.available() > 0) {
+    char command = BT.read();
+    processCommand(command);
+  }
+
+  // 측정 시작 상태라면 1초마다 출력
+  if (measurementEnabled) {
+    unsigned long currentMillis = millis();
+
+    if (currentMillis - previousMillis >= measurementInterval) {
+      previousMillis = currentMillis;
+      printMeasurement();
+    }
+  }
+}
+
+void processCommand(char command) {
+  if (command == 'm' || command == 'M') {
+    measurementEnabled = true;
+    previousMillis = millis() - measurementInterval;
+
+    Serial.println("측정값 출력을 시작합니다.");
+    BT.println("측정값 출력을 시작합니다.");
+  }
+  else if (command == 's' || command == 'S') {
+    measurementEnabled = false;
+
+    Serial.println("측정값 출력을 중지합니다.");
+    BT.println("측정값 출력을 중지합니다.");
+  }
+}
+
+void printMeasurement() {
+  float shunt_mV = ina219.getShuntVoltage_mV();
+  float bus_V = ina219.getBusVoltage_V();
   float current_mA = ina219.getCurrent_mA();
   float power_mW = ina219.getPower_mW();
 
-  float loadVoltage_V = busVoltage_V + (shuntVoltage_mV / 1000.0);
+  float supply_V = bus_V + (shunt_mV / 1000.0);
 
-  Serial.println("===== 무선충전 전력 정보 =====");
+  // USB로 출력
+  Serial.println("===== INA219 측정값 =====");
 
-  Serial.print("전압: ");
-  Serial.print(loadVoltage_V, 3);
+  Serial.print("Bus Voltage: ");
+  Serial.print(bus_V, 2);
   Serial.println(" V");
 
-  Serial.print("전류: ");
+  Serial.print("Supply Voltage: ");
+  Serial.print(supply_V, 2);
+  Serial.println(" V");
+
+  Serial.print("Current: ");
   Serial.print(current_mA, 2);
   Serial.println(" mA");
 
-  Serial.print("전력: ");
+  Serial.print("Power: ");
   Serial.print(power_mW, 2);
   Serial.println(" mW");
 
   Serial.println();
 
-  delay(1000);
+  // HC-06, COM8로 출력
+  BT.println("===== INA219 측정값 =====");
+
+  BT.print("Bus Voltage: ");
+  BT.print(bus_V, 2);
+  BT.println(" V");
+
+  BT.print("Supply Voltage: ");
+  BT.print(supply_V, 2);
+  BT.println(" V");
+
+  BT.print("Current: ");
+  BT.print(current_mA, 2);
+  BT.println(" mA");
+
+  BT.print("Power: ");
+  BT.print(power_mW, 2);
+  BT.println(" mW");
+
+  BT.println();
 }
