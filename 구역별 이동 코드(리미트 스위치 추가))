@@ -300,3 +300,246 @@ void loop() {
         (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' '))
     Serial.read();
 }
+
+
+
+
+
+//조그모드등 여러가지 기능을 넣은 코드//
+// ===== [2번 코드] 18구역 주차장 실제 제어 (시작 시 원점 대기) =====
+// 물리적 원점(MIN): X=0, Y=0 / A1(초기위치): 물리적 X=0, Y=MAX
+
+#include <string.h>
+
+struct Axis {
+  int stepPin, dirPin, minSw, maxSw;
+  bool dirMinus, dirPlus;
+  const char* label;
+};
+
+// ---- 모터 핀 ----
+#define X_STEP 6
+#define X_DIR  7
+#define X_EN   8
+#define Y_STEP 5
+#define Y_DIR  4
+#define Y_EN   12
+
+// ---- 리미트 스위치 ----
+#define X_MIN_SW 9
+#define X_MAX_SW 11
+#define Y_MIN_SW 10
+#define Y_MAX_SW 3
+
+Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
+Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
+
+// ★★★ 여기에 1번 코드(캘리브레이션)에서 나온 스텝 수를 직접 입력하세요! ★★★
+long X_MAX_STEPS = 3440; // (예시) X축 측정값 입력
+long Y_MAX_STEPS = 3560; // (예시) Y축 측정값 입력
+// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+
+double scaleX = 0.0;
+double scaleY = 0.0;
+
+const int FAST_DELAY = 350;
+const int SLOW_DELAY = 1000;
+const long RAMP_STEPS = 1500;
+const int BACKOFF_STEPS = 200;
+
+// ---- 도면 좌표 데이터 (90도 반시계 회전 적용) ----
+const double posX_cm[3] = {13.0, 43.0, 73.0}; // A(좌측), B(중앙), C(우측)
+const double posY_cm[6] = {7.75, 21.25, 34.75, 54.25, 67.75, 81.25}; // 1(하단) ~ 6(상단)
+
+// ---- 상태 변수 ----
+long curX = 0, curY = 0;
+int lastColIdx = -1, lastRowIdx = -1;
+volatile bool stopFlag = false;
+
+void stepOnce(int stepPin, int delayUs) {
+  digitalWrite(stepPin, HIGH); delayMicroseconds(delayUs);
+  digitalWrite(stepPin, LOW);  delayMicroseconds(delayUs);
+}
+
+void checkStopMoving() {
+  if (Serial.available()) {
+    char c = Serial.peek();
+    if (c == 's' || c == 'S' || c == 'e' || c == 'E') {
+      Serial.read(); stopFlag = true;
+      Serial.println(F("\n>> 정지 명령 수신"));
+    }
+  }
+}
+
+void moveAxis(Axis &ax, long target, long &current) {
+  long diff = target - current;
+  if (diff == 0) return;
+  
+  bool movingNeg = (diff < 0);
+  digitalWrite(ax.dirPin, movingNeg ? ax.dirMinus : ax.dirPlus);
+  
+  long steps = abs(diff);
+  long dir = movingNeg ? -1 : 1;
+
+  for (long i = 0; i < steps; i++) {
+    if (stopFlag) return; 
+
+    if (movingNeg && digitalRead(ax.minSw) == LOW) {
+      current = 0; return;
+    }
+    if (!movingNeg && digitalRead(ax.maxSw) == LOW) {
+      current = (ax.label[0] == 'X') ? X_MAX_STEPS : Y_MAX_STEPS; return;
+    }
+
+    int d;
+    long remain = steps - i;
+    if (steps <= RAMP_STEPS * 2) d = SLOW_DELAY;
+    else if (i < RAMP_STEPS) d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
+    else if (remain < RAMP_STEPS) d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
+    else d = FAST_DELAY;
+
+    stepOnce(ax.stepPin, d);
+    current += dir; 
+    if ((i & 0x3F) == 0) checkStopMoving();
+  }
+}
+
+bool moveTo(long tx, long ty) {
+  if (tx < 0 || tx > X_MAX_STEPS || ty < 0 || ty > Y_MAX_STEPS) {
+    Serial.println(F(">> 범위 이탈! 이동 취소")); return false;
+  }
+  moveAxis(yAxis, ty, curY);
+  if (stopFlag) return false;
+  moveAxis(xAxis, tx, curX);
+  return !stopFlag;
+}
+
+void moveToCell(int col_idx, int row_idx) {
+  if (col_idx < 0 || col_idx >= 3 || row_idx < 0 || row_idx >= 6) return;
+  
+  long tx = posX_cm[col_idx] * scaleX;
+  long ty = Y_MAX_STEPS - (posY_cm[row_idx] * scaleY); // Y축 반전
+  
+  char colChar = 'A' + col_idx;
+  int rowNum = row_idx + 1;
+  
+  Serial.print(F(">> [")); Serial.print(colChar); Serial.print(rowNum); 
+  Serial.print(F("] 구역 이동 (목표 X:")); Serial.print(tx);
+  Serial.print(F(" Y:")); Serial.print(ty); Serial.println(F(")"));
+  
+  if (moveTo(tx, ty)) {
+    lastColIdx = col_idx; lastRowIdx = row_idx;
+  }
+}
+
+// 안전한 원점 복귀 (스위치 잘못 눌림 방지 포함)
+void forceHome(Axis &ax, long &current) {
+  digitalWrite(ax.dirPin, ax.dirMinus); 
+  while (digitalRead(ax.minSw) != LOW) {
+    if (stopFlag) return;
+    // 만약 실수로 반대편(MAX)이 눌리면 방향을 뒤집어서 원점으로 가도록 보호
+    if (digitalRead(ax.maxSw) == LOW) {
+      bool tmp = ax.dirMinus; ax.dirMinus = ax.dirPlus; ax.dirPlus = tmp;
+      digitalWrite(ax.dirPin, ax.dirMinus);
+      delay(100);
+      while(digitalRead(ax.maxSw) == LOW) stepOnce(ax.stepPin, SLOW_DELAY);
+    }
+    stepOnce(ax.stepPin, SLOW_DELAY); 
+    if (Serial.available()) checkStopMoving();
+  }
+  digitalWrite(ax.dirPin, ax.dirPlus);
+  for(int i=0; i<BACKOFF_STEPS; i++) stepOnce(ax.stepPin, SLOW_DELAY);
+  current = BACKOFF_STEPS; 
+}
+
+void goHome() {
+  Serial.println(F("\n>> 물리적 원점(X=0, Y=0) 복귀 시작"));
+  stopFlag = false;
+  forceHome(xAxis, curX);
+  if (stopFlag) return;
+  forceHome(yAxis, curY);
+  if (!stopFlag) { lastColIdx = -1; lastRowIdx = -1; Serial.println(F(">> 원점 복귀 완료")); }
+}
+
+void printStatus() {
+  Serial.println(F("\n===== 현재 상태 ====="));
+  Serial.print(F("물리적 좌표  X:")); Serial.print(curX); Serial.print(F(" Y:")); Serial.println(curY);
+  if (lastColIdx >= 0) {
+    Serial.print(F("주차 구역    ")); Serial.print((char)('A' + lastColIdx)); Serial.println(lastRowIdx + 1);
+  } else {
+    Serial.println(F("주차 구역    미확인(원점 또는 이동중)"));
+  }
+  Serial.println(F("====================="));
+}
+
+void jogAxis(Axis &ax, long steps, bool positive, long &current) {
+  digitalWrite(ax.dirPin, positive ? ax.dirPlus : ax.dirMinus);
+  long moved = 0; bool limitHit = false;
+  for (long i = 0; i < steps; i++) {
+    if (Serial.available() && (tolower(Serial.peek()) == 's')) { Serial.read(); break; }
+    if (!positive && digitalRead(ax.minSw) == LOW) { limitHit = true; break; }
+    if (positive && digitalRead(ax.maxSw) == LOW) break;
+    stepOnce(ax.stepPin, SLOW_DELAY); moved++;
+  }
+  if (limitHit) current = 0; else current += positive ? moved : -moved; 
+}
+
+void jogMode() {
+  Serial.println(F("\n===== 수동 조그 모드 ====="));
+  while (true) {
+    if (!Serial.available()) continue;
+    String cmd = Serial.readStringUntil('\n'); cmd.trim();
+    if (cmd.length() == 0) continue;
+    if (cmd == "q" || cmd == "Q") return;
+    else if (cmd.startsWith("x") || cmd.startsWith("X") || cmd.startsWith("y") || cmd.startsWith("Y")) {
+      char axis = tolower(cmd.charAt(0)); char sign = cmd.charAt(1);
+      if (sign != '+' && sign != '-') continue;
+      long n = (cmd.length() > 2) ? cmd.substring(2).toInt() : 100;
+      if (n <= 0) n = 100;
+      if (axis == 'x') jogAxis(xAxis, n, (sign == '+'), curX);
+      else             jogAxis(yAxis, n, (sign == '+'), curY);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(X_STEP, OUTPUT); pinMode(X_DIR, OUTPUT); pinMode(X_EN, OUTPUT);
+  pinMode(Y_STEP, OUTPUT); pinMode(Y_DIR, OUTPUT); pinMode(Y_EN, OUTPUT);
+  pinMode(X_MIN_SW, INPUT_PULLUP); pinMode(X_MAX_SW, INPUT_PULLUP);
+  pinMode(Y_MIN_SW, INPUT_PULLUP); pinMode(Y_MAX_SW, INPUT_PULLUP);
+
+  digitalWrite(X_EN, LOW); digitalWrite(Y_EN, LOW);
+
+  // 스케일 계산
+  if (X_MAX_STEPS > 0) scaleX = (double)X_MAX_STEPS / 86.0;
+  if (Y_MAX_STEPS > 0) scaleY = (double)Y_MAX_STEPS / 89.0;
+
+  goHome(); // 전원 켜면 즉시 원점 잡고 대기 (이동 코드 삭제)
+  
+  Serial.println(F("\n===== 18구역 제어 준비 완료 (원점 대기) ====="));
+  Serial.println(F("이동할 구역을 입력하세요 (예: A1, C6)"));
+}
+
+void loop() {
+  if (!Serial.available()) return;
+  char firstChar = tolower(Serial.read());
+
+  if (firstChar == 'h') goHome();
+  else if (firstChar == 'e') { stopFlag = false; goHome(); }
+  else if (firstChar == 't') printStatus();
+  else if (firstChar == 'j') jogMode();
+  else if (firstChar == 's') { stopFlag = true; Serial.println(F(">> 즉시 정지 명령")); }
+  else if (firstChar >= 'a' && firstChar <= 'c') {
+    delay(20); 
+    if (Serial.available()) {
+      char rowChar = Serial.read(); 
+      int row_idx = rowChar - '1'; 
+      int col_idx = (firstChar == 'a') ? 0 : (firstChar == 'b' ? 1 : 2);
+      if (row_idx >= 0 && row_idx < 6) {
+        stopFlag = false; moveToCell(col_idx, row_idx);
+      } else { Serial.println(F(">> [오류] 잘못된 구역입니다. (예: A1 ~ C6)")); }
+    }
+  }
+  while (Serial.available() && (Serial.peek() == '\n' || Serial.peek() == '\r' || Serial.peek() == ' ')) Serial.read();
+}
