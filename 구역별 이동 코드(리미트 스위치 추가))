@@ -28,8 +28,8 @@ Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
 Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
 
 // ★★★ 여기에 1번 코드(캘리브레이션)에서 나온 스텝 수를 직접 입력하세요! ★★★
-long X_MAX_STEPS = 28128; // (예시) X축 측정값 입력
-long Y_MAX_STEPS = 29881; // (예시) Y축 측정값 입력
+long X_MAX_STEPS = 28178; // (예시) X축 측정값 입력
+long Y_MAX_STEPS = 28926; // (예시) Y축 측정값 입력
 // ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
 double scaleX = 0.0;
