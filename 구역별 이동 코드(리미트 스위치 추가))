@@ -6,7 +6,7 @@
 //   - X: A→C 로 갈수록 스텝 증가(반전 없음) / Y: 1→6 행으로 갈수록 스텝 감소(반전)
 // 보정:
 //   - Y축(원점에서 먼 방향 = 스텝 감소): 1,2,3번 2mm(74) / 4,5,6번 3mm(111) / 4번 추가 1mm(37)
-//   - X축(원점에서 먼 방향 = 스텝 증가): A열 700 / B열 1.5cm(550) / C열 2cm(734)
+//   - X축(원점에서 먼 방향 = 스텝 증가): A열 700 / B열 250(목표 14339) / C열 434(목표 25530)
 
 #include <string.h>
 
@@ -58,9 +58,9 @@ const long CORR_123_STEPS = 74;      // 1,2,3번 2mm
 const long CORR_456_STEPS = 111;     // 4,5,6번 3mm
 const long CORR_4_EXTRA_STEPS = 37;  // 4번 추가 1mm
 // ---- X축 열 보정량 (스텝 증가 = 원점에서 멀어짐) ----
+const long CORR_C_STEPS = 434;       // C열 목표 25530
+const long CORR_B_STEPS = 250;       // B열 목표 14339
 const long CORR_A_STEPS = 700;       // A열 실측 보정
-const long CORR_B_STEPS = 550;       // B열 1.5cm
-const long CORR_C_STEPS = 734;       // C열 2cm
 
 const int FAST_DELAY = 350;
 const int SLOW_DELAY = 1000;
@@ -144,7 +144,7 @@ void moveToCell(int col_idx, int row_idx) {
   long ty = (long)((Y_HOME_cm - posY_cm[row_idx]) * scaleY + 0.5);
 
   // ---- 열 보정 (X축, 원점에서 먼 방향 = 스텝 증가) ----
-  // A열: 700스텝, B열: 1.5cm(≈550스텝), C열: 2cm(≈734스텝) 더 이동
+  // A열: 700스텝, B열: 250스텝(목표14339), C열: 434스텝(목표25530) 더 이동
   if (col_idx == 2)      tx += CORR_C_STEPS;   // C
   else if (col_idx == 1) tx += CORR_B_STEPS;   // B
   else                   tx += CORR_A_STEPS;   // A
