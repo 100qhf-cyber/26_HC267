@@ -1,6 +1,12 @@
-//조그모드등 여러가지 기능을 넣은 코드//
-// ===== [2번 코드] 18구역 주차장 실제 제어 (시작 시 원점 대기) =====
-// 물리적 원점(MIN): X=0, Y=0 / A1(초기위치): 물리적 X=0, Y=MAX
+// ===== 18구역 주차장 실제 제어 (실측 좌표계 + 구역별 보정) =====
+// 물리적 원점(MIN): X=0, Y=0
+// 캐리지 중심 좌표계:
+//   - 스텝 0(X 원점)일 때 캐리지 중심 = 도면 X 4.6cm (X 기판 9.2cm의 절반)
+//   - 스텝 0(Y 원점)일 때 캐리지 중심 = 도면 Y 83.5cm (Y 기판 11cm의 절반, Y축 반전)
+//   - X: A→C 로 갈수록 스텝 증가(반전 없음) / Y: 1→6 행으로 갈수록 스텝 감소(반전)
+// 보정:
+//   - Y축(원점에서 먼 방향 = 스텝 감소): 1,2,3번 2mm(74) / 4,5,6번 3mm(111) / 4번 추가 1mm(37)
+//   - X축(원점에서 먼 방향 = 스텝 증가): A열 700 / B열 1.5cm(550) / C열 2cm(734)
 
 #include <string.h>
 
@@ -19,30 +25,51 @@ struct Axis {
 #define Y_EN   12
 
 // ---- 리미트 스위치 ----
-#define X_MIN_SW 9
-#define X_MAX_SW 11
-#define Y_MIN_SW 10
-#define Y_MAX_SW 3
+#define X_MIN_SW 9    // X축 원점
+#define X_MAX_SW 11   // X축 끝점
+#define Y_MIN_SW 10   // Y축 원점
+#define Y_MAX_SW 3    // Y축 끝점
 
 Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
 Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
 
-// ★★★ 여기에 1번 코드(캘리브레이션)에서 나온 스텝 수를 직접 입력하세요! ★★★
-long X_MAX_STEPS = 28178; // (예시) X축 측정값 입력
-long Y_MAX_STEPS = 28926; // (예시) Y축 측정값 입력
-// ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
+// ---- 실측 전체 스텝 수 (캘리브레이션 측정값) ----
+long X_MAX_STEPS = 28178; // X축 실측
+long Y_MAX_STEPS = 28926; // Y축 실측
 
+// ---- 실제 이동거리(캐리지 중심 이동 가능 거리) ----
+const double TRAVEL_X_cm = 76.8;  // 86 - 기판 9.2
+const double TRAVEL_Y_cm = 78.0;  // 89 - 기판 11
+
+// ---- 캐리지(레일 기판) 절반 오프셋 ----
+const double OFFSET_X_cm = 4.6;  // X 기판 9.2 / 2
+const double OFFSET_Y_cm = 5.5;  // Y 기판 11  / 2
+
+// ---- 스텝 0일 때 캐리지 중심의 도면 좌표 ----
+const double X_HOME_cm = OFFSET_X_cm;          // 4.6
+const double Y_HOME_cm = 89.0 - OFFSET_Y_cm;   // 83.5
+
+// 스케일(스텝/cm) = 실측 스텝 / 실제 이동거리
 double scaleX = 0.0;
 double scaleY = 0.0;
+
+// ---- Y축 보정량 (스텝 감소 = 원점에서 멀어짐) ----
+const long CORR_123_STEPS = 74;      // 1,2,3번 2mm
+const long CORR_456_STEPS = 111;     // 4,5,6번 3mm
+const long CORR_4_EXTRA_STEPS = 37;  // 4번 추가 1mm
+// ---- X축 열 보정량 (스텝 증가 = 원점에서 멀어짐) ----
+const long CORR_A_STEPS = 700;       // A열 실측 보정
+const long CORR_B_STEPS = 550;       // B열 1.5cm
+const long CORR_C_STEPS = 734;       // C열 2cm
 
 const int FAST_DELAY = 350;
 const int SLOW_DELAY = 1000;
 const long RAMP_STEPS = 1500;
 const int BACKOFF_STEPS = 200;
 
-// ---- 도면 좌표 데이터 (90도 반시계 회전 적용) ----
-const double posX_cm[3] = {13.0, 43.0, 73.0}; // A(좌측), B(중앙), C(우측)
-const double posY_cm[6] = {7.75, 21.25, 34.75, 54.25, 67.75, 81.25}; // 1(하단) ~ 6(상단)
+// ---- 도면상 각 구역 중앙점 좌표(cm) ----
+const double posX_cm[3] = {13.0, 43.0, 73.0};
+const double posY_cm[6] = {7.75, 21.25, 34.75, 54.25, 67.75, 81.25};
 
 // ---- 상태 변수 ----
 long curX = 0, curY = 0;
@@ -67,15 +94,15 @@ void checkStopMoving() {
 void moveAxis(Axis &ax, long target, long &current) {
   long diff = target - current;
   if (diff == 0) return;
-  
+
   bool movingNeg = (diff < 0);
   digitalWrite(ax.dirPin, movingNeg ? ax.dirMinus : ax.dirPlus);
-  
+
   long steps = abs(diff);
   long dir = movingNeg ? -1 : 1;
 
   for (long i = 0; i < steps; i++) {
-    if (stopFlag) return; 
+    if (stopFlag) return;
 
     if (movingNeg && digitalRead(ax.minSw) == LOW) {
       current = 0; return;
@@ -92,7 +119,7 @@ void moveAxis(Axis &ax, long target, long &current) {
     else d = FAST_DELAY;
 
     stepOnce(ax.stepPin, d);
-    current += dir; 
+    current += dir;
     if ((i & 0x3F) == 0) checkStopMoving();
   }
 }
@@ -109,40 +136,69 @@ bool moveTo(long tx, long ty) {
 
 void moveToCell(int col_idx, int row_idx) {
   if (col_idx < 0 || col_idx >= 3 || row_idx < 0 || row_idx >= 6) return;
-  
-  long tx = posX_cm[col_idx] * scaleX;
-  long ty = Y_MAX_STEPS - (posY_cm[row_idx] * scaleY); // Y축 반전
-  
+
+  // 캐리지 중심 좌표계 변환
+  //  X: (도면X - 4.6) * scaleX   → A→C 스텝 증가
+  //  Y: (83.5 - 도면Y) * scaleY  → Y 반전(1→6 행 스텝 감소)
+  long tx = (long)((posX_cm[col_idx] - X_HOME_cm) * scaleX + 0.5);
+  long ty = (long)((Y_HOME_cm - posY_cm[row_idx]) * scaleY + 0.5);
+
+  // ---- 열 보정 (X축, 원점에서 먼 방향 = 스텝 증가) ----
+  // A열: 700스텝, B열: 1.5cm(≈550스텝), C열: 2cm(≈734스텝) 더 이동
+  if (col_idx == 2)      tx += CORR_C_STEPS;   // C
+  else if (col_idx == 1) tx += CORR_B_STEPS;   // B
+  else                   tx += CORR_A_STEPS;   // A
+
+  // ---- 1,2,3번 칸(row_idx 0,1,2) 보정 ----
+  // 원점에서 먼 방향으로 2mm 이동(왼쪽). Y 반전이므로 스텝을 줄인다.
+  if (row_idx <= 2) {
+    ty -= CORR_123_STEPS;   // 2mm ≈ 74스텝
+  }
+  // ---- 4,5,6번 칸(row_idx 3,4,5) 보정 ----
+  // 4~6번이 원점 쪽으로 치우침 → 원점에서 멀어지는 방향으로 3mm 더 이동.
+  if (row_idx >= 3) {
+    ty -= CORR_456_STEPS;   // 3mm ≈ 111스텝
+  }
+  // ---- 4번 칸(row_idx 3)만 추가 보정 ----
+  // 4번을 원점에서 1mm(≈37스텝) 더 멀리 이동.
+  if (row_idx == 3) {
+    ty -= CORR_4_EXTRA_STEPS;
+  }
+
+  // 안전 클램프(반올림/미세오차로 범위를 살짝 벗어나는 것 방지)
+  if (tx < 0) tx = 0; if (tx > X_MAX_STEPS) tx = X_MAX_STEPS;
+  if (ty < 0) ty = 0; if (ty > Y_MAX_STEPS) ty = Y_MAX_STEPS;
+
   char colChar = 'A' + col_idx;
   int rowNum = row_idx + 1;
-  
-  Serial.print(F(">> [")); Serial.print(colChar); Serial.print(rowNum); 
+
+  Serial.print(F(">> [")); Serial.print(colChar); Serial.print(rowNum);
   Serial.print(F("] 구역 이동 (목표 X:")); Serial.print(tx);
   Serial.print(F(" Y:")); Serial.print(ty); Serial.println(F(")"));
-  
+
   if (moveTo(tx, ty)) {
     lastColIdx = col_idx; lastRowIdx = row_idx;
+    Serial.println(F(">> 이동 완료"));
   }
 }
 
-// 안전한 원점 복귀 (스위치 잘못 눌림 방지 포함)
+// 안전한 원점 복귀 (반대편 스위치 눌림 보호 포함)
 void forceHome(Axis &ax, long &current) {
-  digitalWrite(ax.dirPin, ax.dirMinus); 
+  digitalWrite(ax.dirPin, ax.dirMinus);
   while (digitalRead(ax.minSw) != LOW) {
     if (stopFlag) return;
-    // 만약 실수로 반대편(MAX)이 눌리면 방향을 뒤집어서 원점으로 가도록 보호
     if (digitalRead(ax.maxSw) == LOW) {
       bool tmp = ax.dirMinus; ax.dirMinus = ax.dirPlus; ax.dirPlus = tmp;
       digitalWrite(ax.dirPin, ax.dirMinus);
       delay(100);
-      while(digitalRead(ax.maxSw) == LOW) stepOnce(ax.stepPin, SLOW_DELAY);
+      while (digitalRead(ax.maxSw) == LOW) stepOnce(ax.stepPin, SLOW_DELAY);
     }
-    stepOnce(ax.stepPin, SLOW_DELAY); 
+    stepOnce(ax.stepPin, SLOW_DELAY);
     if (Serial.available()) checkStopMoving();
   }
   digitalWrite(ax.dirPin, ax.dirPlus);
-  for(int i=0; i<BACKOFF_STEPS; i++) stepOnce(ax.stepPin, SLOW_DELAY);
-  current = BACKOFF_STEPS; 
+  for (int i = 0; i < BACKOFF_STEPS; i++) stepOnce(ax.stepPin, SLOW_DELAY);
+  current = BACKOFF_STEPS;
 }
 
 void goHome() {
@@ -174,11 +230,12 @@ void jogAxis(Axis &ax, long steps, bool positive, long &current) {
     if (positive && digitalRead(ax.maxSw) == LOW) break;
     stepOnce(ax.stepPin, SLOW_DELAY); moved++;
   }
-  if (limitHit) current = 0; else current += positive ? moved : -moved; 
+  if (limitHit) current = 0; else current += positive ? moved : -moved;
 }
 
 void jogMode() {
   Serial.println(F("\n===== 수동 조그 모드 ====="));
+  Serial.println(F("사용법: x+100 / x-50 / y+200 / y-100  (숫자 생략시 100스텝), q=종료"));
   while (true) {
     if (!Serial.available()) continue;
     String cmd = Serial.readStringUntil('\n'); cmd.trim();
@@ -191,6 +248,8 @@ void jogMode() {
       if (n <= 0) n = 100;
       if (axis == 'x') jogAxis(xAxis, n, (sign == '+'), curX);
       else             jogAxis(yAxis, n, (sign == '+'), curY);
+      Serial.print(F(">> 조그 후 좌표  X:")); Serial.print(curX);
+      Serial.print(F(" Y:")); Serial.println(curY);
     }
   }
 }
@@ -204,14 +263,14 @@ void setup() {
 
   digitalWrite(X_EN, LOW); digitalWrite(Y_EN, LOW);
 
-  // 스케일 계산
-  if (X_MAX_STEPS > 0) scaleX = (double)X_MAX_STEPS / 86.0;
-  if (Y_MAX_STEPS > 0) scaleY = (double)Y_MAX_STEPS / 89.0;
+  // 스케일 = 실측 스텝 / 실제 이동거리(cm)
+  scaleX = (double)X_MAX_STEPS / TRAVEL_X_cm;  // ≈ 366.90 스텝/cm
+  scaleY = (double)Y_MAX_STEPS / TRAVEL_Y_cm;  // ≈ 370.85 스텝/cm
 
-  goHome(); // 전원 켜면 즉시 원점 잡고 대기 (이동 코드 삭제)
-  
+  goHome();
+
   Serial.println(F("\n===== 18구역 제어 준비 완료 (원점 대기) ====="));
-  Serial.println(F("이동할 구역을 입력하세요 (예: A1, C6)"));
+  Serial.println(F("이동할 구역 입력 (예: A1, C6)  |  h=원점 t=상태 j=조그 s=정지"));
 }
 
 void loop() {
@@ -224,10 +283,10 @@ void loop() {
   else if (firstChar == 'j') jogMode();
   else if (firstChar == 's') { stopFlag = true; Serial.println(F(">> 즉시 정지 명령")); }
   else if (firstChar >= 'a' && firstChar <= 'c') {
-    delay(20); 
+    delay(20);
     if (Serial.available()) {
-      char rowChar = Serial.read(); 
-      int row_idx = rowChar - '1'; 
+      char rowChar = Serial.read();
+      int row_idx = rowChar - '1';
       int col_idx = (firstChar == 'a') ? 0 : (firstChar == 'b' ? 1 : 2);
       if (row_idx >= 0 && row_idx < 6) {
         stopFlag = false; moveToCell(col_idx, row_idx);
