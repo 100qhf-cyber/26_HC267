@@ -29,30 +29,34 @@ Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
 Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
 
 // ---- 실측 전체 스텝 수 (범위 판정/클램프용) ----
-long X_MAX_STEPS = 28178; // X축 실측
-long Y_MAX_STEPS = 28926; // Y축 실측
+long X_MAX_STEPS = 28178;
+long Y_MAX_STEPS = 28926;
 
 // ==========================================================
 // ===== 구역별 고정 스텝 테이블 (여기만 수정하면 위치 조정) =====
 // ==========================================================
-// X축: 열(A,B,C)별 목표 스텝
-//   A=3082(원점 8.40cm) / B=14089(38.40cm) / C=25096(68.40cm)
-const long stepX[3] = {3082, 14089, 25279};  // C: 25096 → 25279 (+5mm)
-
-// Y축: 행(1~6)별 목표 스텝  (인덱스 0=1행 … 5=6행)
-//   1행 27980 / 2행 22974 / 3행 17967 / 4행 10736 / 5행 5730 / 6행 723
+const long stepX[3] = {3082, 14089, 25279};
 const long stepY[6] = {27980, 22974, 17967, 10736, 5730, 723};
 // ==========================================================
 
-const int FAST_DELAY = 350;
-const int SLOW_DELAY = 1000;
-const long RAMP_STEPS = 1500;
-const int BACKOFF_STEPS = 200;
+const int  FAST_DELAY    = 350;
+const int  SLOW_DELAY    = 1000;
+const long RAMP_STEPS    = 1500;
+const int  BACKOFF_STEPS = 200;
 
 // ---- 상태 변수 ----
 long curX = 0, curY = 0;
-int lastColIdx = -1, lastRowIdx = -1;
+int  lastColIdx = -1, lastRowIdx = -1;
 volatile bool stopFlag = false;
+
+// ---- [추가] 실시간 위치 전송 타이머 ----
+unsigned long lastPosSendMs = 0;
+
+// ---- [추가] Unity로 현재 스텝 위치 전송 ----
+void sendPos() {
+  Serial.print(F("POS:")); Serial.print(curX);
+  Serial.print(F(",")); Serial.println(curY);
+}
 
 void stepOnce(int stepPin, int delayUs) {
   digitalWrite(stepPin, HIGH); delayMicroseconds(delayUs);
@@ -77,7 +81,7 @@ void moveAxis(Axis &ax, long target, long &current) {
   digitalWrite(ax.dirPin, movingNeg ? ax.dirMinus : ax.dirPlus);
 
   long steps = abs(diff);
-  long dir = movingNeg ? -1 : 1;
+  long dir   = movingNeg ? -1 : 1;
 
   for (long i = 0; i < steps; i++) {
     if (stopFlag) return;
@@ -91,13 +95,21 @@ void moveAxis(Axis &ax, long target, long &current) {
 
     int d;
     long remain = steps - i;
-    if (steps <= RAMP_STEPS * 2) d = SLOW_DELAY;
-    else if (i < RAMP_STEPS) d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
-    else if (remain < RAMP_STEPS) d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
-    else d = FAST_DELAY;
+    if (steps <= RAMP_STEPS * 2)    d = SLOW_DELAY;
+    else if (i < RAMP_STEPS)        d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * i / RAMP_STEPS;
+    else if (remain < RAMP_STEPS)   d = SLOW_DELAY - (long)(SLOW_DELAY - FAST_DELAY) * remain / RAMP_STEPS;
+    else                             d = FAST_DELAY;
 
     stepOnce(ax.stepPin, d);
     current += dir;
+
+    // [추가] 100ms마다 Unity에 현재 위치 전송
+    unsigned long now = millis();
+    if (now - lastPosSendMs >= 100UL) {
+      lastPosSendMs = now;
+      sendPos();
+    }
+
     if ((i & 0x3F) == 0) checkStopMoving();
   }
 }
@@ -115,16 +127,14 @@ bool moveTo(long tx, long ty) {
 void moveToCell(int col_idx, int row_idx) {
   if (col_idx < 0 || col_idx >= 3 || row_idx < 0 || row_idx >= 6) return;
 
-  // 고정 테이블에서 목표 스텝을 그대로 읽어온다.
   long tx = stepX[col_idx];
   long ty = stepY[row_idx];
 
-  // 안전 클램프
   if (tx < 0) tx = 0; if (tx > X_MAX_STEPS) tx = X_MAX_STEPS;
   if (ty < 0) ty = 0; if (ty > Y_MAX_STEPS) ty = Y_MAX_STEPS;
 
   char colChar = 'A' + col_idx;
-  int rowNum = row_idx + 1;
+  int  rowNum  = row_idx + 1;
 
   Serial.print(F(">> [")); Serial.print(colChar); Serial.print(rowNum);
   Serial.print(F("] 구역 이동 (목표 X:")); Serial.print(tx);
@@ -133,10 +143,10 @@ void moveToCell(int col_idx, int row_idx) {
   if (moveTo(tx, ty)) {
     lastColIdx = col_idx; lastRowIdx = row_idx;
     Serial.println(F(">> 이동 완료"));
+    sendPos();  // [추가] 도착 확정 위치 전송
   }
 }
 
-// 안전한 원점 복귀 (반대편 스위치 눌림 보호 포함)
 void forceHome(Axis &ax, long &current) {
   digitalWrite(ax.dirPin, ax.dirMinus);
   while (digitalRead(ax.minSw) != LOW) {
@@ -161,7 +171,11 @@ void goHome() {
   forceHome(xAxis, curX);
   if (stopFlag) return;
   forceHome(yAxis, curY);
-  if (!stopFlag) { lastColIdx = -1; lastRowIdx = -1; Serial.println(F(">> 원점 복귀 완료")); }
+  if (!stopFlag) {
+    lastColIdx = -1; lastRowIdx = -1;
+    Serial.println(F(">> 원점 복귀 완료"));
+    sendPos();  // [추가]
+  }
 }
 
 void printStatus() {
@@ -181,7 +195,7 @@ void jogAxis(Axis &ax, long steps, bool positive, long &current) {
   for (long i = 0; i < steps; i++) {
     if (Serial.available() && (tolower(Serial.peek()) == 's')) { Serial.read(); break; }
     if (!positive && digitalRead(ax.minSw) == LOW) { limitHit = true; break; }
-    if (positive && digitalRead(ax.maxSw) == LOW) break;
+    if (positive  && digitalRead(ax.maxSw) == LOW) break;
     stepOnce(ax.stepPin, SLOW_DELAY); moved++;
   }
   if (limitHit) current = 0; else current += positive ? moved : -moved;
@@ -204,6 +218,7 @@ void jogMode() {
       else             jogAxis(yAxis, n, (sign == '+'), curY);
       Serial.print(F(">> 조그 후 좌표  X:")); Serial.print(curX);
       Serial.print(F(" Y:")); Serial.println(curY);
+      sendPos();  // [추가]
     }
   }
 }
@@ -227,7 +242,7 @@ void loop() {
   if (!Serial.available()) return;
   char firstChar = tolower(Serial.read());
 
-  if (firstChar == 'h') goHome();
+  if      (firstChar == 'h') goHome();
   else if (firstChar == 'e') { stopFlag = false; goHome(); }
   else if (firstChar == 't') printStatus();
   else if (firstChar == 'j') jogMode();
