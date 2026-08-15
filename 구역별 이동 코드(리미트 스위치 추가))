@@ -1,14 +1,9 @@
-// ===== 18구역 주차장 실제 제어 (실측 좌표계 + 구역별 보정) =====
-// 물리적 원점(MIN): X=0, Y=0
-// 캐리지 중심 좌표계:
-//   - 스텝 0(X 원점)일 때 캐리지 중심 = 도면 X 4.6cm (X 기판 9.2cm의 절반)
-//   - 스텝 0(Y 원점)일 때 캐리지 중심 = 도면 Y 83.5cm (Y 기판 11cm의 절반, Y축 반전)
-//   - X: A→C 로 갈수록 스텝 증가(반전 없음) / Y: 1→6 행으로 갈수록 스텝 감소(반전)
-// 보정:
-//   - Y축(원점에서 먼 방향 = 스텝 감소): 1,2,3번 2mm(74) / 4,5,6번 3mm(111) / 4번 추가 1mm(37)
-//   - X축(원점에서 먼 방향 = 스텝 증가): A열 700 / B열 250(목표 14339) / C열 434(목표 25530)
-
-#include <string.h>
+// ===== 18구역 주차장 제어 (구역별 스텝수 고정 테이블) =====
+// 각 주차 구역의 목표 스텝수를 실측/조정값으로 직접 고정.
+//   - X축: A→C 로 갈수록 스텝 증가(반전 없음)
+//   - Y축: 1→6 행으로 갈수록 스텝 감소(반전)
+// 비율/스케일/보정(CORR) 계산 로직은 모두 제거하고,
+// 아래 stepX[], stepY[] 테이블 값을 그대로 목표로 이동한다.
 
 struct Axis {
   int stepPin, dirPin, minSw, maxSw;
@@ -33,43 +28,26 @@ struct Axis {
 Axis xAxis = {X_STEP, X_DIR, X_MIN_SW, X_MAX_SW, HIGH, LOW, "X"};
 Axis yAxis = {Y_STEP, Y_DIR, Y_MIN_SW, Y_MAX_SW, HIGH, LOW, "Y"};
 
-// ---- 실측 전체 스텝 수 (캘리브레이션 측정값) ----
+// ---- 실측 전체 스텝 수 (범위 판정/클램프용) ----
 long X_MAX_STEPS = 28178; // X축 실측
 long Y_MAX_STEPS = 28926; // Y축 실측
 
-// ---- 실제 이동거리(캐리지 중심 이동 가능 거리) ----
-const double TRAVEL_X_cm = 76.8;  // 86 - 기판 9.2
-const double TRAVEL_Y_cm = 78.0;  // 89 - 기판 11
+// ==========================================================
+// ===== 구역별 고정 스텝 테이블 (여기만 수정하면 위치 조정) =====
+// ==========================================================
+// X축: 열(A,B,C)별 목표 스텝
+//   A=3082(원점 8.40cm) / B=14089(38.40cm) / C=25096(68.40cm)
+const long stepX[3] = {3082, 14089, 25279};  // C: 25096 → 25279 (+5mm)
 
-// ---- 캐리지(레일 기판) 절반 오프셋 ----
-const double OFFSET_X_cm = 4.6;  // X 기판 9.2 / 2
-const double OFFSET_Y_cm = 5.5;  // Y 기판 11  / 2
-
-// ---- 스텝 0일 때 캐리지 중심의 도면 좌표 ----
-const double X_HOME_cm = OFFSET_X_cm;          // 4.6
-const double Y_HOME_cm = 89.0 - OFFSET_Y_cm;   // 83.5
-
-// 스케일(스텝/cm) = 실측 스텝 / 실제 이동거리
-double scaleX = 0.0;
-double scaleY = 0.0;
-
-// ---- Y축 보정량 (스텝 감소 = 원점에서 멀어짐) ----
-const long CORR_123_STEPS = 74;      // 1,2,3번 2mm
-const long CORR_456_STEPS = 111;     // 4,5,6번 3mm
-const long CORR_4_EXTRA_STEPS = 37;  // 4번 추가 1mm
-// ---- X축 열 보정량 (스텝 증가 = 원점에서 멀어짐) ----
-const long CORR_C_STEPS = 434;       // C열 목표 25530
-const long CORR_B_STEPS = 250;       // B열 목표 14339
-const long CORR_A_STEPS = 700;       // A열 실측 보정
+// Y축: 행(1~6)별 목표 스텝  (인덱스 0=1행 … 5=6행)
+//   1행 27980 / 2행 22974 / 3행 17967 / 4행 10736 / 5행 5730 / 6행 723
+const long stepY[6] = {27980, 22974, 17967, 10736, 5730, 723};
+// ==========================================================
 
 const int FAST_DELAY = 350;
 const int SLOW_DELAY = 1000;
 const long RAMP_STEPS = 1500;
 const int BACKOFF_STEPS = 200;
-
-// ---- 도면상 각 구역 중앙점 좌표(cm) ----
-const double posX_cm[3] = {13.0, 43.0, 73.0};
-const double posY_cm[6] = {7.75, 21.25, 34.75, 54.25, 67.75, 81.25};
 
 // ---- 상태 변수 ----
 long curX = 0, curY = 0;
@@ -137,35 +115,11 @@ bool moveTo(long tx, long ty) {
 void moveToCell(int col_idx, int row_idx) {
   if (col_idx < 0 || col_idx >= 3 || row_idx < 0 || row_idx >= 6) return;
 
-  // 캐리지 중심 좌표계 변환
-  //  X: (도면X - 4.6) * scaleX   → A→C 스텝 증가
-  //  Y: (83.5 - 도면Y) * scaleY  → Y 반전(1→6 행 스텝 감소)
-  long tx = (long)((posX_cm[col_idx] - X_HOME_cm) * scaleX + 0.5);
-  long ty = (long)((Y_HOME_cm - posY_cm[row_idx]) * scaleY + 0.5);
+  // 고정 테이블에서 목표 스텝을 그대로 읽어온다.
+  long tx = stepX[col_idx];
+  long ty = stepY[row_idx];
 
-  // ---- 열 보정 (X축, 원점에서 먼 방향 = 스텝 증가) ----
-  // A열: 700스텝, B열: 250스텝(목표14339), C열: 434스텝(목표25530) 더 이동
-  if (col_idx == 2)      tx += CORR_C_STEPS;   // C
-  else if (col_idx == 1) tx += CORR_B_STEPS;   // B
-  else                   tx += CORR_A_STEPS;   // A
-
-  // ---- 1,2,3번 칸(row_idx 0,1,2) 보정 ----
-  // 원점에서 먼 방향으로 2mm 이동(왼쪽). Y 반전이므로 스텝을 줄인다.
-  if (row_idx <= 2) {
-    ty -= CORR_123_STEPS;   // 2mm ≈ 74스텝
-  }
-  // ---- 4,5,6번 칸(row_idx 3,4,5) 보정 ----
-  // 4~6번이 원점 쪽으로 치우침 → 원점에서 멀어지는 방향으로 3mm 더 이동.
-  if (row_idx >= 3) {
-    ty -= CORR_456_STEPS;   // 3mm ≈ 111스텝
-  }
-  // ---- 4번 칸(row_idx 3)만 추가 보정 ----
-  // 4번을 원점에서 1mm(≈37스텝) 더 멀리 이동.
-  if (row_idx == 3) {
-    ty -= CORR_4_EXTRA_STEPS;
-  }
-
-  // 안전 클램프(반올림/미세오차로 범위를 살짝 벗어나는 것 방지)
+  // 안전 클램프
   if (tx < 0) tx = 0; if (tx > X_MAX_STEPS) tx = X_MAX_STEPS;
   if (ty < 0) ty = 0; if (ty > Y_MAX_STEPS) ty = Y_MAX_STEPS;
 
@@ -262,10 +216,6 @@ void setup() {
   pinMode(Y_MIN_SW, INPUT_PULLUP); pinMode(Y_MAX_SW, INPUT_PULLUP);
 
   digitalWrite(X_EN, LOW); digitalWrite(Y_EN, LOW);
-
-  // 스케일 = 실측 스텝 / 실제 이동거리(cm)
-  scaleX = (double)X_MAX_STEPS / TRAVEL_X_cm;  // ≈ 366.90 스텝/cm
-  scaleY = (double)Y_MAX_STEPS / TRAVEL_Y_cm;  // ≈ 370.85 스텝/cm
 
   goHome();
 
