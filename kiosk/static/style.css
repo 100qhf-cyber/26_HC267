@@ -164,8 +164,9 @@ table {
 
 th, td {
   padding: 16px;
-  text-align: left;
-  border-bottom: 1px solid #e2e8f0; /* 표 테두리 밝게 */
+  text-align: center; /* 가로 정렬: left에서 center로 변경 */
+  vertical-align: middle; /* 세로 정렬: 칸의 중앙에 딱 맞춤 */
+  border-bottom: 1px solid #e2e8f0;
 }
 
 th {
