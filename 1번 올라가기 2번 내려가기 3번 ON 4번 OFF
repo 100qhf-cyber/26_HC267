@@ -1,0 +1,177 @@
+#include <SoftwareSerial.h>
+
+// ==========================================
+// HC-06 블루투스
+// HC-06 TXD → Nano D9
+// Nano D10 → 분압 → HC-06 RXD
+// ==========================================
+SoftwareSerial BT(9, 10);   // RX, TX
+
+
+// ==========================================
+// Z축 모터
+// 실제로는 CNC Shield X축 슬롯 사용
+// ==========================================
+#define STEP_PIN 2
+#define DIR_PIN  5
+#define EN_PIN   8
+
+// 방향 수정 완료
+#define UP_DIR   LOW
+#define DOWN_DIR HIGH
+
+
+// ==========================================
+// 릴레이
+// 릴레이 IN → Nano D11
+// ==========================================
+#define RELAY_PIN 11
+
+// 대부분의 릴레이 모듈이 Active LOW인 경우
+#define RELAY_ON  LOW
+#define RELAY_OFF HIGH
+
+
+// ==========================================
+// 모터 속도
+// 작을수록 빠름
+// ==========================================
+const int STEP_DELAY_US = 600;
+
+
+// ==========================================
+// 모터 상태
+//  0 = 정지
+//  1 = 상승
+// -1 = 하강
+// ==========================================
+int motorState = 0;
+
+
+void setup() {
+
+  Serial.begin(9600);
+  BT.begin(9600);
+
+
+  // 모터 핀
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(EN_PIN, OUTPUT);
+
+
+  // 릴레이 핀
+  pinMode(RELAY_PIN, OUTPUT);
+
+
+  // 시작 상태
+  digitalWrite(STEP_PIN, LOW);
+  digitalWrite(EN_PIN, HIGH);
+
+  // 처음에는 릴레이 OFF
+  digitalWrite(RELAY_PIN, RELAY_OFF);
+
+
+  Serial.println("========================");
+  Serial.println(" Z AXIS + RELAY READY");
+  Serial.println("========================");
+  Serial.println("1 = Z UP");
+  Serial.println("2 = Z DOWN");
+  Serial.println("3 = RELAY ON");
+  Serial.println("4 = RELAY OFF");
+  Serial.println("s = Z STOP");
+}
+
+
+void loop() {
+
+  // ========================================
+  // HC-06 명령 수신
+  // ========================================
+  if (BT.available() > 0) {
+
+    char command = BT.read();
+
+
+    // --------------------------------------
+    // 1 : Z축 계속 상승
+    // --------------------------------------
+    if (command == '1') {
+
+      motorState = 1;
+
+      digitalWrite(DIR_PIN, UP_DIR);
+      digitalWrite(EN_PIN, LOW);
+
+      BT.println("Z UP");
+      Serial.println("Z UP");
+    }
+
+
+    // --------------------------------------
+    // 2 : Z축 계속 하강
+    // --------------------------------------
+    else if (command == '2') {
+
+      motorState = -1;
+
+      digitalWrite(DIR_PIN, DOWN_DIR);
+      digitalWrite(EN_PIN, LOW);
+
+      BT.println("Z DOWN");
+      Serial.println("Z DOWN");
+    }
+
+
+    // --------------------------------------
+    // 3 : 릴레이 ON
+    // --------------------------------------
+    else if (command == '3') {
+
+      digitalWrite(RELAY_PIN, RELAY_ON);
+
+      BT.println("RELAY ON");
+      Serial.println("RELAY ON");
+    }
+
+
+    // --------------------------------------
+    // 4 : 릴레이 OFF
+    // --------------------------------------
+    else if (command == '4') {
+
+      digitalWrite(RELAY_PIN, RELAY_OFF);
+
+      BT.println("RELAY OFF");
+      Serial.println("RELAY OFF");
+    }
+
+
+    // --------------------------------------
+    // s : Z축 정지
+    // --------------------------------------
+    else if (command == 's' || command == 'S') {
+
+      motorState = 0;
+
+      digitalWrite(STEP_PIN, LOW);
+      digitalWrite(EN_PIN, HIGH);
+
+      BT.println("Z STOP");
+      Serial.println("Z STOP");
+    }
+  }
+
+
+  // ========================================
+  // Z축 연속 회전
+  // ========================================
+  if (motorState != 0) {
+
+    digitalWrite(STEP_PIN, HIGH);
+    delayMicroseconds(STEP_DELAY_US);
+
+    digitalWrite(STEP_PIN, LOW);
+    delayMicroseconds(STEP_DELAY_US);
+  }
+}
